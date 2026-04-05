@@ -175,7 +175,7 @@ var stocks=JSON.parse(localStorage.getItem('wl_local2')||'[]'),prices={};
 var editId=null,autoRef=true,refInt=60,countdown=60,refTimer=null,syncTimer=null,curPage='dashboard';
 localStorage.setItem('jb_key',JB_KEY);localStorage.setItem('jb_bin',BIN_ID);
 
-var breadth=JSON.parse(localStorage.getItem('apex_breadth')||'null')||{adv:0,dec:0,unch:0,newHighs:0,newLows:0,mccOsc:0,summIdx:0,mccEma19:0,mccEma39:0,trin:0,putCall:0,pctAbove200:0,pctAbove100:0,pctAbove50:0,pctAbove20:0,upVol:0,downVol:0,sectors:{Energy:0,Utilities:0,Materials:0,'Comm Services':0,'Consumer Staples':0,'Real Estate':0,'Consumer Disc':0,'Info Tech':0,'Health Care':0,Industrials:0,Financials:0},updated:''};
+var breadth=JSON.parse(localStorage.getItem('apex_breadth')||'null')||{adv:0,dec:0,unch:0,newHighs:0,newLows:0,mccOsc:0,summIdx:0,mccEma19:0,mccEma39:0,trin:0,putCall:0,pctAbove200:0,pctAbove100:0,pctAbove50:0,pctAbove20:0,upVol:0,downVol:0,sectors:{Energy:0,Utilities:0,Materials:0,'Comm Services':0,Staples:0,'Real Estate':0,'Consumer Disc':0,'Info Tech':0,Healthcare:0,Industrials:0,Financials:0},updated:''};
 var macro=JSON.parse(localStorage.getItem('apex_macro')||'null')||{t10y:{v:0,chg:0,trend:'—',dt:''},t2y:{v:0,chg:0,trend:'—',dt:''},curve:{v:0,chg:0,trend:'—',dt:''},fedFunds:{v:0,chg:0,trend:'HOLD',dt:''},unemp:{v:0,chg:0,trend:'—',dt:''},claims:{v:0,chg:0,trend:'—',dt:''},breakeven:{v:0,chg:0,trend:'—',dt:''},cpi:{v:0,chg:0,trend:'—',dt:''},oil:{v:0,chg:0,trend:'—',dt:''},dxy:{v:0,chg:0,trend:'—',dt:''},updated:''};
 var breadthDirty=false;
 
@@ -380,18 +380,19 @@ async function fetchBreadthFromNexus(){
       }
       if(d.pctAbove200!=null)breadth.pctAbove200=d.pctAbove200;
       if(d.pctAbove50!=null)breadth.pctAbove50=d.pctAbove50;
-      // Sector breadth — normalize long GICS names to short display names
-      var sectorNameMap={'Communication Services':'Comm Services','Consumer Discretionary':'Consumer Disc','Consumer Staples':'Staples','Information Technology':'Info Tech','Health Care':'Healthcare','Real Estate':'Real Estate','Financials':'Financials','Industrials':'Industrials','Materials':'Materials','Utilities':'Utilities','Energy':'Energy'};
-      function normSector(n){return sectorNameMap[n]||n;}
-      var hasSectorData=false;
+      // Sector breadth — normalize ALL incoming names to short display names
+      var _snm={'Communication Services':'Comm Services','Consumer Discretionary':'Consumer Disc','Consumer Staples':'Staples','Information Technology':'Info Tech','Health Care':'Healthcare','Real Estate':'Real Estate','Financials':'Financials','Industrials':'Industrials','Materials':'Materials','Utilities':'Utilities','Energy':'Energy'};
+      function normSec(n){return _snm[n]||n;}
       if(d.sector_breadth&&Array.isArray(d.sector_breadth)&&d.sector_breadth.length>0){
         breadth.sectors={};
-        d.sector_breadth.forEach(function(s){var name=normSector(s.name||s.sector||'');if(name)breadth.sectors[name]=s.pct||s.percent||s.value||0;});
-        hasSectorData=true;
-      }
-      if(d.sectors&&typeof d.sectors==='object'&&!Array.isArray(d.sectors)){
-        if(!hasSectorData)breadth.sectors={};
-        Object.entries(d.sectors).forEach(function(e){breadth.sectors[normSector(e[0])]=parseFloat(e[1])||0;});
+        d.sector_breadth.forEach(function(s){
+          var raw=s.name||s.sector||'';
+          var name=normSec(raw);
+          if(name)breadth.sectors[name]=s.pct||s.percent||s.value||0;
+        });
+      } else if(d.sectors&&typeof d.sectors==='object'&&!Array.isArray(d.sectors)){
+        breadth.sectors={};
+        Object.entries(d.sectors).forEach(function(e){breadth.sectors[normSec(e[0])]=parseFloat(e[1])||0;});
       }
       breadth.updated=new Date().toLocaleString('en-US',{timeZone:'America/New_York'});
       localStorage.setItem('apex_breadth',JSON.stringify(breadth));
