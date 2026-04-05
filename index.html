@@ -352,60 +352,56 @@ async function fetchBreadthFromNexus(){
 // ── COT DATA ─────────────────────────────────────────────────────────────
 var cotData=JSON.parse(localStorage.getItem('apex_cot')||'{}');
 var ivData=JSON.parse(localStorage.getItem('apex_iv')||'{}');
-var COT_API='https://publicreporting.cftc.gov/resource/6dca-aqe5.json';
 var COT_CONTRACTS=[
-  {search:'E-MINI S&P 500',label:'ES — S&P 500',cat:'equity'},
-  {search:'NASDAQ-100 STOCK INDEX',label:'NQ — Nasdaq 100',cat:'equity'},
-  {search:'E-MINI RUSSELL 2000',label:'RTY — Russell 2000',cat:'equity'},
-  {search:'VIX FUTURES',label:'VIX — Volatility',cat:'equity'},
-  {search:'10-YEAR U.S. TREASURY',label:'ZN — 10Y Treasury',cat:'rates'},
-  {search:'2-YEAR U.S. TREASURY',label:'ZT — 2Y Treasury',cat:'rates'},
-  {search:'30-DAY FEDERAL FUNDS',label:'ZQ — Fed Funds',cat:'rates'},
-  {search:'CRUDE OIL, LIGHT SWEET',label:'CL — Crude Oil',cat:'commodity'},
-  {search:'GOLD',label:'GC — Gold',cat:'commodity'},
-  {search:'U.S. DOLLAR INDEX',label:'DX — Dollar Index',cat:'commodity'}
+  {label:'E-Mini S&P 500',name:'E-MINI S&P 500 STOCK INDEX - CHICAGO MERCANTILE EXCHANGE',cat:'equity'},
+  {label:'Nasdaq 100',name:'NASDAQ-100 STOCK INDEX (MINI) - CHICAGO MERCANTILE EXCHANGE',cat:'equity'},
+  {label:'Russell 2000',name:'E-MINI RUSSELL 2000 INDEX - CHICAGO MERCANTILE EXCHANGE',cat:'equity'},
+  {label:'VIX Futures',name:'CBOE VOLATILITY INDEX - CBOE FUTURES EXCHANGE',cat:'equity'},
+  {label:'10Y Treasury',name:'10-YEAR U.S. TREASURY NOTES - CHICAGO BOARD OF TRADE',cat:'rates'},
+  {label:'2Y Treasury',name:'2-YEAR U.S. TREASURY NOTES - CHICAGO BOARD OF TRADE',cat:'rates'},
+  {label:'30D Fed Funds',name:'30-DAY FEDERAL FUNDS - CHICAGO BOARD OF TRADE',cat:'rates'},
+  {label:'Crude Oil',name:'CRUDE OIL, LIGHT SWEET - NEW YORK MERCANTILE EXCHANGE',cat:'commodity'},
+  {label:'Gold (COMEX)',name:'GOLD - COMMODITY EXCHANGE INC.',cat:'commodity'},
+  {label:'US Dollar Index',name:'U.S. DOLLAR INDEX - ICE FUTURES U.S.',cat:'commodity'}
 ];
 
 window.fetchCOT=async function(){
   showToast('Fetching COT data...','info');
-  var count=0;
-  for(var c of COT_CONTRACTS){
-    try{
-      var url=COT_API+'?$where=market_and_exchange_names like \'%25'+encodeURIComponent(c.search)+'%25\'&$order=report_date_as_yyyy_mm_dd DESC&$limit=2';
-      var r=await fetch(url);if(!r.ok)continue;
-      var rows=await r.json();
-      if(rows.length>=1){
-        var cur=rows[0],prev=rows[1]||{};
-        var ncLong=parseInt(cur.noncomm_positions_long_all||0);
-        var ncShort=parseInt(cur.noncomm_positions_short_all||0);
-        var cLong=parseInt(cur.comm_positions_long_all||0);
-        var cShort=parseInt(cur.comm_positions_short_all||0);
-        var oi=parseInt(cur.open_interest_all||0);
-        var ncNet=ncLong-ncShort;
-        var cNet=cLong-cShort;
-        var prevNcNet=prev.noncomm_positions_long_all?(parseInt(prev.noncomm_positions_long_all)-parseInt(prev.noncomm_positions_short_all)):null;
-        var prevCNet=prev.comm_positions_long_all?(parseInt(prev.comm_positions_long_all)-parseInt(prev.comm_positions_short_all)):null;
-        cotData[c.search]={
-          label:c.label,cat:c.cat,date:cur.report_date_as_yyyy_mm_dd,
-          ncLong:ncLong,ncShort:ncShort,ncNet:ncNet,
-          cLong:cLong,cShort:cShort,cNet:cNet,
-          oi:oi,
-          ncChg:prevNcNet!==null?(ncNet-prevNcNet):0,
-          cChg:prevCNet!==null?(cNet-prevCNet):0
-        };
-        count++;
-      }
-    }catch(e){console.error('COT '+c.search,e);}
-  }
-  cotData._updated=new Date().toLocaleString('en-US',{timeZone:'America/New_York'});
-  localStorage.setItem('apex_cot',JSON.stringify(cotData));
-  renderOptCot();
-  if(count>0){showToast(count+' COT contracts updated','success');try{await saveToBin();}catch(e){}}
-  else showToast('COT fetch failed — CFTC may be down','err');
+  try{
+    var resp=await fetch(NEXUS_API+'/api/cot');
+    if(!resp.ok)throw new Error('HTTP '+resp.status);
+    var rows=await resp.json();
+    if(!rows||!rows.length){showToast('No COT data returned','err');return;}
+    var count=0;
+    COT_CONTRACTS.forEach(function(contract){
+      var all=rows.filter(function(r){return r.market_and_exchange_names===contract.name;})
+        .sort(function(a,b){return(b.report_date_as_yyyy_mm_dd||'').localeCompare(a.report_date_as_yyyy_mm_dd||'');});
+      if(!all.length)return;
+      var cur=all[0],prev=all[1]||null;
+      var ncLong=parseInt(cur.noncommercial_positions_long_all||cur.noncomm_positions_long_all||0);
+      var ncShort=parseInt(cur.noncommercial_positions_short_all||cur.noncomm_positions_short_all||0);
+      var ncNet=ncLong-ncShort;
+      var prevNet=prev?(parseInt(prev.noncommercial_positions_long_all||prev.noncomm_positions_long_all||0)-parseInt(prev.noncommercial_positions_short_all||prev.noncomm_positions_short_all||0)):null;
+      var wkChg=prevNet!==null?(ncNet-prevNet):0;
+      var oi=parseInt(cur.open_interest_all||1);
+      var pctOI=((ncNet/oi)*100).toFixed(1);
+      var date=(cur.report_date_as_yyyy_mm_dd||'').split('T')[0];
+      cotData[contract.label]={
+        label:contract.label,cat:contract.cat,date:date,
+        ncNet:ncNet,ncChg:wkChg,oi:oi,pctOI:parseFloat(pctOI),
+        signal:ncNet>0?'NET LONG':'NET SHORT'
+      };
+      count++;
+    });
+    cotData._updated=new Date().toLocaleString('en-US',{timeZone:'America/New_York'});
+    localStorage.setItem('apex_cot',JSON.stringify(cotData));
+    renderOptCot();
+    if(count>0){showToast(count+' COT contracts loaded','success');try{await saveToBin();}catch(e){}}
+    else showToast('No matching contracts found','err');
+  }catch(e){console.warn('[APEX] COT fetch failed:',e.message);showToast('COT fetch failed','err');}
 };
 
 function renderOptCot(){
-  // COT Table
   var cotEl=document.getElementById('cot-table');
   var updEl=document.getElementById('cot-updated');
   if(updEl)updEl.textContent=cotData._updated?'  UPDATED: '+cotData._updated:'';
@@ -414,26 +410,29 @@ function renderOptCot(){
   var html='';
   cats.forEach(function(cat){
     var items=COT_CONTRACTS.filter(function(c){return c.cat===cat;});
-    var hasData=items.some(function(c){return cotData[c.search];});
     html+='<div style="margin-bottom:16px"><div style="font-family:var(--font-mono);font-size:11px;font-weight:700;color:var(--dim);letter-spacing:1px;margin-bottom:8px;padding-left:4px">'+catLabels[cat]+'</div>';
     html+='<div class="section-table" style="border:1px solid var(--border);border-radius:8px"><table><thead><tr>';
-    html+='<th>Contract</th><th>Report Date</th><th style="color:var(--accent)">Spec Net</th><th>Spec Δ</th><th style="color:var(--gold)">Comm Net</th><th>Comm Δ</th><th>Open Interest</th>';
+    html+='<th>Contract</th><th>Report Date</th><th style="color:var(--accent)">Spec Net</th><th>Wk Change</th><th>Open Interest</th><th>Signal</th>';
     html+='</tr></thead><tbody>';
     items.forEach(function(c){
-      var d=cotData[c.search];
-      if(!d){html+='<tr><td class="cell-ticker">'+c.label+'</td><td colspan="6" style="color:var(--dim)">No data — click Fetch COT</td></tr>';return;}
+      // Look up data by label
+      var d=cotData[c.label];
+      if(!d){
+        // Try to find by partial match
+        Object.keys(cotData).forEach(function(k){if(k!=='_updated'&&!d){var v=cotData[k];if(v.label&&v.label===c.label)d=v;if(v.cat===c.cat&&k.indexOf(c.label.split(' ')[0])>=0)d=v;}});
+      }
+      if(!d){html+='<tr><td class="cell-ticker">'+c.label+'</td><td colspan="5" style="color:var(--dim)">Fetching...</td></tr>';return;}
       var specCls=d.ncNet>0?'cell-up':'cell-down';
-      var commCls=d.cNet>0?'cell-up':'cell-down';
-      var specChgCls=d.ncChg>0?'cell-up arrow-up':d.ncChg<0?'cell-down arrow-down':'cell-flat';
-      var commChgCls=d.cChg>0?'cell-up arrow-up':d.cChg<0?'cell-down arrow-down':'cell-flat';
+      var chgCls=d.ncChg>0?'cell-up arrow-up':d.ncChg<0?'cell-down arrow-down':'cell-flat';
+      var signal=d.signal||(d.ncNet>0?'NET LONG':'NET SHORT');
+      var sigColor=signal.includes('LONG')?'var(--green)':signal.includes('SHORT')?'var(--red)':'var(--muted)';
       html+='<tr>';
       html+='<td class="cell-ticker">'+d.label+'</td>';
-      html+='<td style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">'+d.date+'</td>';
+      html+='<td style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">'+(d.date||'—')+'</td>';
       html+='<td style="font-family:var(--font-mono);font-weight:700" class="'+specCls+'">'+d.ncNet.toLocaleString()+'</td>';
-      html+='<td><span class="cell-pct '+specChgCls+'" style="font-size:11px">'+(d.ncChg>0?'+':'')+d.ncChg.toLocaleString()+'</span></td>';
-      html+='<td style="font-family:var(--font-mono);font-weight:700" class="'+commCls+'">'+d.cNet.toLocaleString()+'</td>';
-      html+='<td><span class="cell-pct '+commChgCls+'" style="font-size:11px">'+(d.cChg>0?'+':'')+d.cChg.toLocaleString()+'</span></td>';
-      html+='<td style="font-family:var(--font-mono);color:var(--muted)">'+d.oi.toLocaleString()+'</td>';
+      html+='<td><span class="cell-pct '+chgCls+'" style="font-size:11px">'+(d.ncChg>0?'+':'')+d.ncChg.toLocaleString()+'</span></td>';
+      html+='<td style="font-family:var(--font-mono);color:var(--muted)">'+(d.oi?d.oi.toLocaleString():'—')+'</td>';
+      html+='<td style="font-family:var(--font-mono);font-size:11px;font-weight:700;color:'+sigColor+'">'+signal+'</td>';
       html+='</tr>';
     });
     html+='</tbody></table></div></div>';
