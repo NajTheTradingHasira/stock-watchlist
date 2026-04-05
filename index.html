@@ -380,12 +380,14 @@ async function fetchBreadthFromNexus(){
       }
       if(d.pctAbove200!=null)breadth.pctAbove200=d.pctAbove200;
       if(d.pctAbove50!=null)breadth.pctAbove50=d.pctAbove50;
-      // Sector breadth
+      // Sector breadth — normalize long GICS names to short display names
+      var sectorNameMap={'Communication Services':'Comm Services','Consumer Discretionary':'Consumer Disc','Consumer Staples':'Staples','Information Technology':'Info Tech','Health Care':'Healthcare','Real Estate':'Real Estate','Financials':'Financials','Industrials':'Industrials','Materials':'Materials','Utilities':'Utilities','Energy':'Energy'};
+      function normSector(n){return sectorNameMap[n]||n;}
       if(d.sector_breadth&&Array.isArray(d.sector_breadth)){
-        d.sector_breadth.forEach(function(s){breadth.sectors[s.name||s.sector]=s.pct||s.percent||s.value||0;});
+        d.sector_breadth.forEach(function(s){var name=normSector(s.name||s.sector||'');if(name)breadth.sectors[name]=s.pct||s.percent||s.value||0;});
       }
       if(d.sectors&&typeof d.sectors==='object'&&!Array.isArray(d.sectors)){
-        Object.entries(d.sectors).forEach(function(e){breadth.sectors[e[0]]=parseFloat(e[1])||0;});
+        Object.entries(d.sectors).forEach(function(e){breadth.sectors[normSector(e[0])]=parseFloat(e[1])||0;});
       }
       breadth.updated=new Date().toLocaleString('en-US',{timeZone:'America/New_York'});
       localStorage.setItem('apex_breadth',JSON.stringify(breadth));
