@@ -383,10 +383,14 @@ async function fetchBreadthFromNexus(){
       // Sector breadth — normalize long GICS names to short display names
       var sectorNameMap={'Communication Services':'Comm Services','Consumer Discretionary':'Consumer Disc','Consumer Staples':'Staples','Information Technology':'Info Tech','Health Care':'Healthcare','Real Estate':'Real Estate','Financials':'Financials','Industrials':'Industrials','Materials':'Materials','Utilities':'Utilities','Energy':'Energy'};
       function normSector(n){return sectorNameMap[n]||n;}
-      if(d.sector_breadth&&Array.isArray(d.sector_breadth)){
+      var hasSectorData=false;
+      if(d.sector_breadth&&Array.isArray(d.sector_breadth)&&d.sector_breadth.length>0){
+        breadth.sectors={};
         d.sector_breadth.forEach(function(s){var name=normSector(s.name||s.sector||'');if(name)breadth.sectors[name]=s.pct||s.percent||s.value||0;});
+        hasSectorData=true;
       }
       if(d.sectors&&typeof d.sectors==='object'&&!Array.isArray(d.sectors)){
+        if(!hasSectorData)breadth.sectors={};
         Object.entries(d.sectors).forEach(function(e){breadth.sectors[normSector(e[0])]=parseFloat(e[1])||0;});
       }
       breadth.updated=new Date().toLocaleString('en-US',{timeZone:'America/New_York'});
