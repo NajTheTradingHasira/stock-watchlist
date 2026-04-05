@@ -354,6 +354,8 @@ async function fetchBreadthFromNexus(){
       if(d.summation!=null)breadth.summIdx=d.summation;
       if(d.summation_index!=null)breadth.summIdx=d.summation_index;
       if(d.summationIndex!=null)breadth.summIdx=d.summationIndex;
+      if(d.ema19!=null)breadth.mccEma19=d.ema19;
+      if(d.ema39!=null)breadth.mccEma39=d.ema39;
       if(d.mcclellan19!=null)breadth.mccEma19=d.mcclellan19;
       if(d.mcclellan39!=null)breadth.mccEma39=d.mcclellan39;
       // MA breadth
