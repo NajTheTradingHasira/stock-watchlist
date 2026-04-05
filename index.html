@@ -196,10 +196,10 @@ function setFS(){}
 function setLU(m,t){var e=document.getElementById('lu-st');e.textContent=m;e.style.color=t==='ok'?'var(--green)':t==='err'?'var(--red)':'var(--muted)';}
 
 async function launchApp(){document.getElementById('fh-screen').style.display='none';document.getElementById('app').style.display='block';document.getElementById('live-dot').style.display='flex';document.getElementById('set-bin-id').textContent=BIN_ID;updateClock();setInterval(updateClock,1000);await pullFromBin();startSyncTimer();fetchAll();startRefTimer();renderDashboard();document.addEventListener('visibilitychange',function(){if(!document.hidden)pullFromBin();});
-// Auto-fill: Breadth (Nexus), COT (CFTC), FRED (if key)
+// Auto-fill: Breadth (Nexus), COT (Nexus), Macro (Nexus → FRED)
 setTimeout(function(){fetchBreadthFromNexus();},2000);
 setTimeout(function(){fetchCOT();},3000);
-if(FRED_KEY)setTimeout(function(){fetchFRED();},5000);
+setTimeout(function(){fetchMacroFromNexus();},4000);
 }
 window.switchPage=function(pg){curPage=pg;document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active');});document.getElementById('pg-'+pg).classList.add('active');document.querySelectorAll('.nav-tab').forEach(function(t){t.classList.toggle('active',t.dataset.page===pg);});var sb=document.getElementById('save-breadth-btn');sb.style.display=(pg==='breadth'||pg==='macro')?'block':'none';if(pg==='dashboard')renderDashboard();if(pg==='watchlist')renderWatchlist();if(pg==='breadth')renderBreadth();if(pg==='macro')renderMacro();if(pg==='optcot')renderOptCot();};
 
@@ -324,21 +324,52 @@ async function fetchBreadthFromNexus(){
       if(d.declining!=null)breadth.dec=d.declining;
       if(d.unchanged!=null)breadth.unch=d.unchanged;
       if(d.newHighs!=null)breadth.newHighs=d.newHighs;
+      if(d.new_highs!=null)breadth.newHighs=d.new_highs;
       if(d.newLows!=null)breadth.newLows=d.newLows;
-      if(d.upVolume!=null)breadth.upVol=d.upVolume;
-      if(d.downVolume!=null)breadth.downVol=d.downVolume;
+      if(d.new_lows!=null)breadth.newLows=d.new_lows;
+      if(d.upVol!=null)breadth.upVol=d.upVol;
+      if(d.up_volume!=null)breadth.upVol=d.up_volume;
+      if(d.downVol!=null)breadth.downVol=d.downVol;
+      if(d.down_volume!=null)breadth.downVol=d.down_volume;
       if(d.trin!=null)breadth.trin=d.trin;
       if(d.putCallRatio!=null)breadth.putCall=d.putCallRatio;
+      if(d.put_call_ratio!=null)breadth.putCall=d.put_call_ratio;
+      if(d.mcclellan!=null)breadth.mccOsc=d.mcclellan;
+      if(d.mcclellan_oscillator!=null)breadth.mccOsc=d.mcclellan_oscillator;
       if(d.mcclellanOsc!=null)breadth.mccOsc=d.mcclellanOsc;
+      if(d.summation!=null)breadth.summIdx=d.summation;
+      if(d.summation_index!=null)breadth.summIdx=d.summation_index;
       if(d.summationIndex!=null)breadth.summIdx=d.summationIndex;
       if(d.mcclellan19!=null)breadth.mccEma19=d.mcclellan19;
       if(d.mcclellan39!=null)breadth.mccEma39=d.mcclellan39;
+      // MA breadth
+      if(d.ma_breadth&&Array.isArray(d.ma_breadth)){
+        d.ma_breadth.forEach(function(m){
+          var lbl=(m.label||m.name||m.ma||'').toLowerCase();
+          var pct=m.pct||m.percent||m.value||0;
+          if(lbl.includes('200'))breadth.pctAbove200=pct;
+          if(lbl.includes('100'))breadth.pctAbove100=pct;
+          if(lbl.includes('50'))breadth.pctAbove50=pct;
+          if(lbl.includes('20'))breadth.pctAbove20=pct;
+        });
+      }
+      if(d.above_ma&&typeof d.above_ma==='object'){
+        Object.entries(d.above_ma).forEach(function(e){
+          var lbl=e[0].toLowerCase(),pct=parseFloat(e[1])||0;
+          if(lbl.includes('200'))breadth.pctAbove200=pct;
+          if(lbl.includes('100'))breadth.pctAbove100=pct;
+          if(lbl.includes('50'))breadth.pctAbove50=pct;
+          if(lbl.includes('20'))breadth.pctAbove20=pct;
+        });
+      }
       if(d.pctAbove200!=null)breadth.pctAbove200=d.pctAbove200;
-      if(d.pctAbove100!=null)breadth.pctAbove100=d.pctAbove100;
       if(d.pctAbove50!=null)breadth.pctAbove50=d.pctAbove50;
-      if(d.pctAbove20!=null)breadth.pctAbove20=d.pctAbove20;
-      if(d.sectors){
-        Object.keys(d.sectors).forEach(function(s){breadth.sectors[s]=d.sectors[s];});
+      // Sector breadth
+      if(d.sector_breadth&&Array.isArray(d.sector_breadth)){
+        d.sector_breadth.forEach(function(s){breadth.sectors[s.name||s.sector]=s.pct||s.percent||s.value||0;});
+      }
+      if(d.sectors&&typeof d.sectors==='object'&&!Array.isArray(d.sectors)){
+        Object.entries(d.sectors).forEach(function(e){breadth.sectors[e[0]]=parseFloat(e[1])||0;});
       }
       breadth.updated=new Date().toLocaleString('en-US',{timeZone:'America/New_York'});
       localStorage.setItem('apex_breadth',JSON.stringify(breadth));
@@ -347,6 +378,31 @@ async function fetchBreadthFromNexus(){
       console.log('[APEX] Breadth data loaded from Nexus');
     }
   }catch(e){console.warn('[APEX] Nexus breadth fetch failed:',e.message);}
+}
+
+// ── MACRO AUTO-FETCH (Nexus → FRED) ─────────────────────────────────────
+async function fetchMacroFromNexus(){
+  try{
+    var resp=await fetch(NEXUS_API+'/api/macro');
+    if(!resp.ok)throw new Error('HTTP '+resp.status);
+    var data=await resp.json();
+    var ind=data.indicators||{};
+    var keyMap={DGS10:'t10y',DGS2:'t2y',YIELD_CURVE:'curve',T10Y2Y:'curve',FEDFUNDS:'fedFunds',UNRATE:'unemp',ICSA:'claims',T10YIE:'breakeven',CPIAUCSL:'cpi'};
+    Object.keys(keyMap).forEach(function(fredKey){
+      var d=ind[fredKey];if(!d)return;
+      var mk=keyMap[fredKey];
+      macro[mk]={
+        v:d.value||0,
+        chg:d.change||0,
+        trend:d.signal||d.trend||'—',
+        dt:d.date||''
+      };
+    });
+    macro.updated=new Date().toLocaleString('en-US',{timeZone:'America/New_York'});
+    localStorage.setItem('apex_macro',JSON.stringify(macro));
+    if(curPage==='macro')renderMacro();
+    console.log('[APEX] Macro data loaded from Nexus');
+  }catch(e){console.warn('[APEX] Nexus macro fetch failed:',e.message);}
 }
 
 // ── COT DATA ─────────────────────────────────────────────────────────────
