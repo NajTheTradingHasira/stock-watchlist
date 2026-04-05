@@ -189,7 +189,7 @@ var SECTIONS=[
 {id:'insidersell',dot:'var(--pink)',title:'INSIDER SELLING',desc:'notable insider sales · large dispositions',defStage:'Stage 3',defSetup:'Distribution'},
 {id:'shorts',dot:'var(--red)',title:'SHORTS',desc:'stage 4 declines · short candidates',defStage:'Stage 4',defSetup:'Distribution'}];
 
-var INDEX_SYMS=['SPY','QQQ','IWM','DIA','VIX','USO'];
+var INDEX_SYMS=['SPY','QQQ','IWM','DIA','VIX','USO','DX-Y.NYB'];
 
 function showToast(m,t){var e=document.getElementById('toast');e.textContent=m;e.className='toast '+(t||'success')+' show';setTimeout(function(){e.classList.remove('show');},3000);}
 function setFS(){}
@@ -235,6 +235,22 @@ async function fetchAll(){
     }catch(e){console.warn('[APEX] Price fetch failed:',e.message);}
   }
   updateTickerScroll();
+  // Macro fallback: fill Oil and DXY from live price data if FRED returned 0
+  if(prices.USO&&prices.USO.price){
+    var oilP=parseFloat(prices.USO.price);var oilChg=parseFloat(prices.USO.dayPct)||0;
+    if(!macro.oil||!macro.oil.v||macro.oil.v===0){
+      macro.oil={v:Math.round(oilP*100)/100,chg:Math.round(oilChg*100)/100,trend:oilChg>0?'RISING':oilChg<0?'FALLING':'FLAT',dt:new Date().toISOString().split('T')[0]};
+      console.log('[APEX] Oil filled from USO price:',oilP);
+    }
+  }
+  if(prices['DX-Y.NYB']&&prices['DX-Y.NYB'].price){
+    var dxyP=parseFloat(prices['DX-Y.NYB'].price);var dxyChg=parseFloat(prices['DX-Y.NYB'].dayPct)||0;
+    if(!macro.dxy||!macro.dxy.v||macro.dxy.v===0){
+      macro.dxy={v:Math.round(dxyP*100)/100,chg:Math.round(dxyChg*100)/100,trend:dxyChg>0?'RISING':dxyChg<0?'FALLING':'FLAT',dt:new Date().toISOString().split('T')[0]};
+      console.log('[APEX] DXY filled from DX-Y.NYB price:',dxyP);
+    }
+  }
+  if(curPage==='macro')renderMacro();
   if(curPage==='dashboard')renderDashboard();
   if(curPage==='watchlist')renderWatchlist();
   document.getElementById('spin').style.display='none';
@@ -398,6 +414,15 @@ async function fetchMacroFromNexus(){
         dt:d.date||''
       };
     });
+    // Fill Oil and DXY from live prices if Nexus/FRED didn't provide them
+    if((!macro.oil||!macro.oil.v||macro.oil.v===0)&&prices.USO&&prices.USO.price){
+      var oilP=parseFloat(prices.USO.price);var oilChg=parseFloat(prices.USO.dayPct)||0;
+      macro.oil={v:Math.round(oilP*100)/100,chg:Math.round(oilChg*100)/100,trend:oilChg>0?'RISING':oilChg<0?'FALLING':'FLAT',dt:new Date().toISOString().split('T')[0]};
+    }
+    if((!macro.dxy||!macro.dxy.v||macro.dxy.v===0)&&prices['DX-Y.NYB']&&prices['DX-Y.NYB'].price){
+      var dxyP=parseFloat(prices['DX-Y.NYB'].price);var dxyChg=parseFloat(prices['DX-Y.NYB'].dayPct)||0;
+      macro.dxy={v:Math.round(dxyP*100)/100,chg:Math.round(dxyChg*100)/100,trend:dxyChg>0?'RISING':dxyChg<0?'FALLING':'FLAT',dt:new Date().toISOString().split('T')[0]};
+    }
     macro.updated=new Date().toLocaleString('en-US',{timeZone:'America/New_York'});
     localStorage.setItem('apex_macro',JSON.stringify(macro));
     if(curPage==='macro')renderMacro();
@@ -497,7 +522,7 @@ function renderOptCot(){
 }
 function renderDashboard(){var vixD=prices.VIX||{};var vixPrice=parseFloat(vixD.price)||0;var vixPct=parseFloat(vixD.dayPct)||0;var vixLabel=vixPrice<15?'Low Vol':vixPrice<20?'Normal':vixPrice<30?'Elevated':'High Fear';var adTotal=breadth.adv+breadth.dec+breadth.unch;var sectorNames=Object.keys(breadth.sectors||{});var leader='—',leaderPct=0;sectorNames.forEach(function(s){if(breadth.sectors[s]>leaderPct){leaderPct=breadth.sectors[s];leader=s;}});
 document.getElementById('dash-summary').innerHTML='<div class="card"><div class="card-label">MARKET BREADTH</div><div class="card-value card-sm" style="color:var(--accent)">'+(breadth.adv||'—')+' / '+(adTotal||'—')+'</div><div class="card-sub">Adv/Dec · NYSE</div></div>'+'<div class="card"><div class="card-label">VIX</div><div class="card-value card-sm" style="color:'+(vixPrice>25?'var(--red)':vixPrice>20?'var(--warn)':'var(--green)')+'">'+(vixPrice?vixPrice.toFixed(2):'—')+'</div><div class="card-sub" style="color:'+(vixPct<0?'var(--green)':'var(--red)')+'">'+fp(vixPct)+' · '+vixLabel+'</div></div>'+'<div class="card"><div class="card-label">PUT/CALL RATIO</div><div class="card-value card-sm" style="color:'+(breadth.putCall>1?'var(--red)':breadth.putCall>0.7?'var(--warn)':'var(--green)')+'">'+(breadth.putCall||'—')+'</div><div class="card-sub">'+(breadth.putCall>1?'Bearish':breadth.putCall>0.7?'Neutral':'Bullish')+'</div></div>'+'<div class="card"><div class="card-label">SECTOR LEADER</div><div class="card-value" style="font-size:20px;color:var(--gold)">'+leader+'</div><div class="card-sub">'+leaderPct+'% above 50d</div></div>';
-var idxHtml='';INDEX_SYMS.forEach(function(sym){var d=prices[sym]||{};var pr=parseFloat(d.price)||0;var ch=parseFloat(d.dayPct)||0;var label=sym==='USO'?'CRUDE OIL (USO)':sym;idxHtml+='<div class="card"><div class="card-label">'+label+'</div><div class="card-value card-sm">'+(pr?pr.toFixed(2):'—')+'</div><div class="card-sub" style="color:'+(ch>=0?'var(--green)':'var(--red)')+'">'+fp(ch)+'</div></div>';});
+var idxHtml='';INDEX_SYMS.forEach(function(sym){var d=prices[sym]||{};var pr=parseFloat(d.price)||0;var ch=parseFloat(d.dayPct)||0;var label=sym==='USO'?'CRUDE OIL (USO)':sym==='DX-Y.NYB'?'US DOLLAR (DXY)':sym;idxHtml+='<div class="card"><div class="card-label">'+label+'</div><div class="card-value card-sm">'+(pr?pr.toFixed(2):'—')+'</div><div class="card-sub" style="color:'+(ch>=0?'var(--green)':'var(--red)')+'">'+fp(ch)+'</div></div>';});
 document.getElementById('dash-indices').innerHTML=idxHtml;}
 
 function renderBreadth(){var b=breadth;var adTotal=b.adv+b.dec+b.unch||1;var advPct=(b.adv/adTotal*100).toFixed(1);var decPct=(b.dec/adTotal*100).toFixed(1);var adRatio=b.dec?(b.adv/b.dec).toFixed(2):'—';var hlRatio=b.newLows?(b.newHighs/b.newLows).toFixed(2):'—';var volRatio=b.downVol?(b.upVol/b.downVol).toFixed(2):'—';var mccColor=b.mccOsc>100?'var(--green)':b.mccOsc<-100?'var(--red)':'var(--muted)';var mccLabel=b.mccOsc>100?'Overbought':b.mccOsc<-100?'Oversold':'Neutral';
