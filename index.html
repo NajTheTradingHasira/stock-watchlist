@@ -198,6 +198,7 @@ async function launchApp(){document.getElementById('fh-screen').style.display='n
 setTimeout(function(){fetchBreadthFromNexus();},2000);
 setTimeout(function(){fetchCOT();},3000);
 setTimeout(function(){fetchMacroFromNexus();},4000);
+setTimeout(function(){fetchRegimeScan();},5000);
 }
 window.switchPage=function(pg){curPage=pg;document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active');});document.getElementById('pg-'+pg).classList.add('active');document.querySelectorAll('.nav-tab').forEach(function(t){t.classList.toggle('active',t.dataset.page===pg);});if(pg==='dashboard')renderDashboard();if(pg==='watchlist')renderWatchlist();if(pg==='breadth')renderBreadth();if(pg==='macro')renderMacro();if(pg==='optcot')renderOptCot();};
 
@@ -420,6 +421,35 @@ async function fetchBreadthFromNexus(){
   }catch(e){console.warn('[APEX] Nexus breadth fetch failed:',e.message);}
 }
 
+// ── FINVIZ REGIME SCAN (breadth_data.json from GitHub) ──────────────────
+async function fetchRegimeScan(){
+  try{
+    var resp=await fetch('breadth_data.json?t='+Date.now());
+    if(!resp.ok)throw new Error('HTTP '+resp.status);
+    var d=await resp.json();
+    if(d){
+      // Merge Finviz breadth into the breadth object
+      if(d.pct_above_200!=null)breadth.pctAbove200=d.pct_above_200;
+      if(d.pct_above_50!=null)breadth.pctAbove50=d.pct_above_50;
+      if(d.new_highs!=null)breadth.newHighs=d.new_highs;
+      if(d.new_lows!=null)breadth.newLows=d.new_lows;
+      // Store regime data for display
+      breadth.regimeLabel=d.regime_label||'';
+      breadth.regimeScore=d.regime_score||0;
+      breadth.regimeAction=d.regime_action||'';
+      breadth.regimeHostile=d.hostile||false;
+      breadth.regimeSignals=d.signals||[];
+      breadth.regimeUniverse=d.universe||0;
+      breadth.regimeDate=d.date||'';
+      breadth.updated=d.date+' '+d.time+' ET (Finviz scan)';
+      localStorage.setItem('apex_breadth',JSON.stringify(breadth));
+      if(curPage==='breadth')renderBreadth();
+      if(curPage==='dashboard')renderDashboard();
+      console.log('[APEX] Regime scan loaded:',d.regime_label);
+    }
+  }catch(e){console.warn('[APEX] Regime scan fetch failed:',e.message);}
+}
+
 // ── MACRO AUTO-FETCH (Nexus → FRED) ─────────────────────────────────────
 async function fetchMacroFromNexus(){
   try{
@@ -556,7 +586,9 @@ document.getElementById('breadth-mid').innerHTML='<div class="card"><div class="
 var sectorHtml='';var sortedSectors=Object.keys(b.sectors||{}).sort(function(a,c){return(b.sectors[c]||0)-(b.sectors[a]||0);});sortedSectors.forEach(function(s){var p=b.sectors[s]||0;var bc=p>50?'var(--green)':p>30?'var(--gold)':'var(--red)';sectorHtml+='<div class="sector-row"><span class="sector-name">'+s+'</span><div class="sector-bar-wrap"><div class="sector-bar-fill" style="width:'+p+'%;background:'+bc+'"></div></div><span class="sector-pct" style="color:'+bc+';font-family:var(--font-mono)">'+p+'%</span></div>';});
 document.getElementById('breadth-bot').innerHTML='<div class="card"><div class="card-label">SECTOR BREADTH — % ABOVE 50-DAY MA</div>'+sectorHtml+'</div>'+'<div class="card"><div class="card-label">% OF S&P 500 ABOVE KEY MAs</div><div class="ma-row"><span class="ma-label">20-Day MA</span><div class="ma-bar-wrap"><div class="ma-bar-fill" style="width:'+b.pctAbove20+'%;background:var(--red)"></div></div><span class="ma-pct" style="color:var(--red)">'+ef('pctAbove20','edf-sm')+'%</span></div><div class="ma-row"><span class="ma-label">50-Day MA</span><div class="ma-bar-wrap"><div class="ma-bar-fill" style="width:'+b.pctAbove50+'%;background:var(--red)"></div></div><span class="ma-pct" style="color:var(--red)">'+ef('pctAbove50','edf-sm')+'%</span></div><div class="ma-row"><span class="ma-label">100-Day MA</span><div class="ma-bar-wrap"><div class="ma-bar-fill" style="width:'+b.pctAbove100+'%;background:var(--gold)"></div></div><span class="ma-pct" style="color:var(--gold)">'+ef('pctAbove100','edf-sm')+'%</span></div><div class="ma-row"><span class="ma-label">200-Day MA</span><div class="ma-bar-wrap"><div class="ma-bar-fill" style="width:'+b.pctAbove200+'%;background:var(--accent)"></div></div><span class="ma-pct" style="color:var(--accent)">'+b.pctAbove200+'%</span></div><div style="margin-top:16px"><div class="card-label">PUT/CALL RATIO</div><div style="font-family:var(--font-mono);font-size:22px;font-weight:800;margin-top:6px;color:'+(b.putCall>1?'var(--red)':'var(--green)')+'">'+ef('putCall','edf-lg')+'</div></div><div style="margin-top:12px"><div class="card-label">TRIN GUIDE</div><div class="trin-guide">&lt; 0.75 → Overbought<br>0.75–1.25 → Neutral<br>1.25–2.0 → Selling pressure<br>&gt; 2.0 → Panic / reversal</div></div></div>';
 var adTotal2=b.adv+b.dec+b.unch||1;var advPct2=b.adv/adTotal2*100;var adC=advPct2>60?'var(--green)':advPct2<40?'var(--red)':'var(--gold)';var adL=advPct2>60?'Bullish':advPct2<40?'Bearish':'Neutral';var mcC=b.mccOsc>100?'var(--green)':b.mccOsc<-100?'var(--red)':'var(--gold)';var mcL=b.mccOsc>100?'Overbought Watch':b.mccOsc<-100?'Oversold Watch':'Neutral Range';var hlC=b.newHighs>b.newLows?'var(--green)':'var(--red)';var hlL=b.newHighs>b.newLows?'New Highs Leading':'New Lows Dominating';
-document.getElementById('breadth-interp').innerHTML='<div class="card" style="grid-column:1/-1"><div class="card-label">BREADTH INTERPRETATION & REGIME SIGNAL</div><div class="interp-card" style="border-color:'+adC+'"><div class="interp-title" style="color:'+adC+'">A/D Ratio — '+adL+'</div><div class="interp-body">NYSE advancing issues ('+b.adv+') represent '+advPct2.toFixed(1)+'% of total.'+(advPct2<50?' Broad participation is lacking.':' Broad participation supports the move.')+'</div></div><div class="interp-card" style="border-color:'+mcC+'"><div class="interp-title" style="color:'+mcC+'">McClellan Oscillator — '+mcL+'</div><div class="interp-body">At '+b.mccOsc+', '+(b.mccOsc>100?'overbought territory (>100).':b.mccOsc<-100?'approaching oversold (<-100). Summation at '+b.summIdx+' confirms downward pressure.':'neutral range.')+'</div></div><div class="interp-card" style="border-color:'+hlC+'"><div class="interp-title" style="color:'+hlC+'">'+hlL+'</div><div class="interp-body">52-week '+(b.newHighs>b.newLows?'highs ('+b.newHighs+') outpacing lows ('+b.newLows+').':'lows ('+b.newLows+') outnumbering highs ('+b.newHighs+'). Consistent with Stage 4 deterioration.')+'</div></div></div>';}
+var regimeColor=b.regimeScore>=4?'var(--green)':b.regimeScore>=2?'var(--green)':b.regimeScore>=0?'var(--gold)':b.regimeScore>=-2?'var(--red)':'var(--red)';
+var regimeHtml=b.regimeLabel?'<div class="interp-card" style="border-color:'+regimeColor+';border-width:2px"><div class="interp-title" style="color:'+regimeColor+';font-size:16px">'+b.regimeLabel+'</div><div class="interp-body" style="margin-bottom:8px"><strong>Action:</strong> '+( b.regimeAction||'—')+'</div><div style="display:flex;gap:12px;flex-wrap:wrap;font-family:var(--font-mono);font-size:12px;margin-bottom:8px"><div>Above 200d: <strong style="color:'+(b.pctAbove200>50?'var(--green)':'var(--red)')+'">'+b.pctAbove200+'%</strong></div><div>Above 50d: <strong style="color:'+(b.pctAbove50>50?'var(--green)':'var(--red)')+'">'+b.pctAbove50+'%</strong></div><div>NH/NL: <strong style="color:'+(hlRatio>=1?'var(--green)':'var(--red)')+'">'+hlRatio+'</strong></div><div>Universe: <strong>'+( b.regimeUniverse||'—')+'</strong></div><div>Score: <strong style="color:'+regimeColor+'">'+( b.regimeScore||0)+'/6</strong></div></div>'+(b.regimeSignals&&b.regimeSignals.length?'<div style="font-size:11px;color:var(--muted)">'+b.regimeSignals.map(function(s){return'• '+s}).join('<br>')+'</div>':'')+(b.regimeHostile?'<div style="margin-top:6px;padding:4px 8px;background:rgba(239,68,68,.1);border-radius:4px;color:var(--red);font-weight:700;font-size:12px">⚠ HOSTILE ENVIRONMENT</div>':'')+'<div style="margin-top:6px;font-size:10px;color:var(--dim)">Finviz scan: '+(b.regimeDate||'')+'</div></div>':'';
+document.getElementById('breadth-interp').innerHTML='<div class="card" style="grid-column:1/-1"><div class="card-label">BREADTH INTERPRETATION & REGIME SIGNAL</div>'+regimeHtml+'<div class="interp-card" style="border-color:'+adC+'"><div class="interp-title" style="color:'+adC+'">A/D Ratio — '+adL+'</div><div class="interp-body">NYSE advancing issues ('+b.adv+') represent '+advPct2.toFixed(1)+'% of total.'+(advPct2<50?' Broad participation is lacking.':' Broad participation supports the move.')+'</div></div><div class="interp-card" style="border-color:'+mcC+'"><div class="interp-title" style="color:'+mcC+'">McClellan Oscillator — '+mcL+'</div><div class="interp-body">At '+b.mccOsc+', '+(b.mccOsc>100?'overbought territory (>100).':b.mccOsc<-100?'approaching oversold (<-100). Summation at '+b.summIdx+' confirms downward pressure.':'neutral range.')+'</div></div><div class="interp-card" style="border-color:'+hlC+'"><div class="interp-title" style="color:'+hlC+'">'+hlL+'</div><div class="interp-body">52-week '+(b.newHighs>b.newLows?'highs ('+b.newHighs+') outpacing lows ('+b.newLows+').':'lows ('+b.newLows+') outnumbering highs ('+b.newHighs+'). Consistent with Stage 4 deterioration.')+'</div></div></div>';}
 
 function renderMacro(){document.getElementById('macro-updated').textContent=macro.updated?'UPDATED: '+macro.updated:'';var items=[['t10y','10Y TREASURY','%'],['t2y','2Y TREASURY','%'],['curve','YIELD CURVE (10Y-2Y)','%'],['fedFunds','FED FUNDS RATE','%'],['unemp','UNEMPLOYMENT','%'],['claims','INITIAL CLAIMS','K'],['breakeven','10Y BREAKEVEN INFLATION','%'],['cpi','CPI (ALL URBAN)',''],['oil','CRUDE OIL',''],['dxy','US DOLLAR INDEX','']];var html='';items.forEach(function(item){var key=item[0],label=item[1],suffix=item[2];var d=macro[key]||{v:0,chg:0,trend:'—',dt:''};var tField=d.trend||'—';var chgStr=d.chg?(d.chg>0?'+':'')+d.chg:'0';html+='<div class="card"><div class="card-label">'+label+'</div><div class="card-value card-sm" style="color:var(--accent);font-family:var(--font-mono)">'+(d.v||'—')+'<span style="font-size:14px">'+suffix+'</span></div><div class="card-sub" style="color:'+trendColor(tField)+'"><span style="font-family:var(--font-mono)">'+chgStr+'</span> · <span style="color:'+trendColor(tField)+'">'+tField+'</span> · <span style="color:var(--muted);font-size:10px">'+(d.dt||'')+'</span></div></div>';});document.getElementById('macro-cards').innerHTML=html;}
 

@@ -1,0 +1,25 @@
+{
+  "date": "2026-04-06",
+  "time": "21:46",
+  "universe": 3115,
+  "pct_above_200": 47.5,
+  "pct_above_50": 30.5,
+  "above_200": 1480,
+  "below_200": 1635,
+  "above_50": 951,
+  "below_50": 2164,
+  "new_highs": 74,
+  "new_lows": 10,
+  "hl_ratio": 7.4,
+  "gainers_month": 951,
+  "losers_month": 2149,
+  "regime_score": 0,
+  "regime_label": "STAGE 3 \u2014 TOPPING / MIXED",
+  "regime_action": "Reduce position sizes. Raise stops. No new margin.",
+  "hostile": false,
+  "signals": [
+    "200d breadth WEAK (47.5%)",
+    "50d breadth WEAK (30.5%)",
+    "NH/NL ratio STRONG (7.4)"
+  ]
+}
