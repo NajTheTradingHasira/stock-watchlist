@@ -121,6 +121,10 @@ tbody tr:last-child td{border-bottom:none;}tbody tr:hover td{background:rgba(255
 .toast.show{transform:translateY(0);opacity:1;}.toast.success{border-color:var(--green);color:var(--green);}.toast.err{border-color:var(--red);color:var(--red);}.toast.info{border-color:var(--accent);color:var(--accent);}
 .trin-guide{font-family:var(--font-mono);font-size:11px;color:var(--dim);line-height:1.8;margin-top:12px;}
 @media(max-width:768px){.fg{grid-template-columns:1fr;}.full{grid-column:1/1;}.section-add{flex-wrap:wrap;}.topbar{flex-wrap:wrap;gap:8px;}.ticker-scroll{display:none;}.card-grid{grid-template-columns:1fr 1fr;}.card-grid-2{grid-template-columns:1fr;}.nav{gap:2px;padding:6px 10px;}.nav-tab{padding:5px 10px;font-size:11px;}}
+.ticker-ext{font-size:10px;font-weight:600;opacity:.6;margin-left:2px;font-family:var(--font-mono);}
+.ext-toggle{background:var(--s1);border:1px solid var(--border);border-radius:6px;padding:8px 14px;color:var(--muted);font-size:11px;font-weight:700;cursor:pointer;font-family:var(--font-mono);letter-spacing:.5px;}
+.ext-toggle:hover{border-color:var(--accent);color:var(--accent);}
+.ext-toggle.active{background:rgba(59,130,246,.1);border-color:var(--accent);color:var(--accent);}
 </style>
 </head>
 <body>
@@ -130,7 +134,7 @@ tbody tr:last-child td{border-bottom:none;}tbody tr:hover td{background:rgba(255
 <div class="progress-bar"><div class="progress-fill" id="rprog" style="width:100%"></div></div>
 <div class="nav"><button class="nav-tab active" data-page="dashboard" onclick="switchPage('dashboard')">DASHBOARD</button><button class="nav-tab" data-page="watchlist" onclick="switchPage('watchlist')">WATCHLIST</button><button class="nav-tab" data-page="optcot" onclick="switchPage('optcot')">OPTIONS / COT</button><button class="nav-tab" data-page="breadth" onclick="switchPage('breadth')">MARKET BREADTH</button><button class="nav-tab" data-page="macro" onclick="switchPage('macro')">MACRO</button></div>
 <div class="page active" id="pg-dashboard"><div class="card-grid" id="dash-summary"></div><div class="card-grid" id="dash-indices"></div></div>
-<div class="page" id="pg-watchlist"><div class="search-bar"><div class="search-wrap"><input type="text" id="srch" placeholder="Search ticker, company, sector..." oninput="renderWatchlist()"></div><button class="refresh-btn" onclick="manualRef()">↻ Refresh</button></div><div id="sections"></div></div>
+<div class="page" id="pg-watchlist"><div class="search-bar"><div class="search-wrap"><input type="text" id="srch" placeholder="Search ticker, company, sector..." oninput="renderWatchlist()"></div><button class="refresh-btn" onclick="manualRef()">↻ Refresh</button><button class="ext-toggle" id="ext-toggle" onclick="toggleExtHrs()">EXT HRS</button></div><div id="sections"></div></div>
 <div class="page" id="pg-optcot">
 <div style="font-family:var(--font-mono);font-size:12px;color:var(--dim);margin-bottom:16px;display:flex;align-items:center;gap:8px;">COT — COMMITMENT OF TRADERS<span style="color:var(--muted)" id="cot-updated"></span><button class="refresh-btn" style="margin-left:auto;padding:6px 12px;font-size:11px" onclick="fetchCOT()">📡 Fetch COT</button></div>
 <div id="cot-table" style="margin-bottom:30px"></div>
@@ -157,6 +161,7 @@ tbody tr:last-child td{border-bottom:none;}tbody tr:hover td{background:rgba(255
 <div class="mo" id="set-mo"><div class="md" style="max-width:420px"><div class="mh"><h2>Settings</h2><button class="mcb" onclick="closeSet()">✕</button></div><div class="mb">
 <div style="margin-bottom:16px"><div class="ff"><label>JSONBin Key</label><div class="lr"><input type="password" id="set-jb" placeholder="$2a$10$..."><button class="lb" onclick="updateJB()">Save</button></div></div><div style="font-size:10px;color:var(--dim);margin-top:4px;font-family:var(--font-mono)">Bin: <span id="set-bin-id"></span></div></div>
 <div style="margin-bottom:16px"><div class="ff"><label>FRED API Key <a href="https://fred.stlouisfed.org/docs/api/api_key.html" target="_blank" style="color:var(--accent);font-size:9px;text-decoration:none">GET FREE KEY →</a></label><div class="lr"><input type="password" id="set-fred" placeholder="Your FRED key"><button class="lb" onclick="updateFRED()">Save</button></div></div></div>
+<div style="margin-bottom:16px"><div class="ff"><label>Polygon.io API Key <a href="https://polygon.io/dashboard/api-keys" target="_blank" style="color:var(--accent);font-size:9px;text-decoration:none">GET KEY →</a></label><div class="lr"><input type="password" id="set-polygon" placeholder="Your Polygon key (for extended hours)"><button class="lb" onclick="updatePolygon()">Save</button></div><div style="font-size:10px;color:var(--dim);margin-top:4px;font-family:var(--font-mono)">Enables pre-market & after-hours data</div></div></div>
 <div style="margin-bottom:16px"><div class="ff"><label>Refresh</label><select id="ri-sel" onchange="updateRI()" style="background:var(--bg);border:1px solid var(--border);border-radius:5px;padding:8px;color:var(--text);font-size:13px"><option value="30">30s</option><option value="60" selected>60s</option><option value="120">2m</option><option value="300">5m</option></select></div></div>
 <div style="border-top:1px solid var(--border);padding-top:14px;display:flex;gap:8px"><button class="btn" style="background:rgba(239,68,68,.1);color:var(--red);border:1px solid rgba(239,68,68,.2);flex:1" onclick="clearAll()">Delete All</button><button class="btn bs" style="flex:1" onclick="resetAll()">Reset</button></div>
 </div><div class="mf"><button class="btn bp" onclick="closeSet()">Done</button></div></div></div>
@@ -176,6 +181,123 @@ localStorage.setItem('jb_key',JB_KEY);localStorage.setItem('jb_bin',BIN_ID);
 var breadth=JSON.parse(localStorage.getItem('apex_breadth')||'null')||{adv:0,dec:0,unch:0,newHighs:0,newLows:0,mccOsc:0,summIdx:0,mccEma19:0,mccEma39:0,trin:0,putCall:0,pctAbove200:0,pctAbove100:0,pctAbove50:0,pctAbove20:0,upVol:0,downVol:0,sectors:{Energy:0,Utilities:0,Materials:0,'Comm Services':0,Staples:0,'Real Estate':0,'Consumer Disc':0,'Info Tech':0,Healthcare:0,Industrials:0,Financials:0},updated:''};
 var macro=JSON.parse(localStorage.getItem('apex_macro')||'null')||{t10y:{v:0,chg:0,trend:'—',dt:''},t2y:{v:0,chg:0,trend:'—',dt:''},curve:{v:0,chg:0,trend:'—',dt:''},fedFunds:{v:0,chg:0,trend:'HOLD',dt:''},unemp:{v:0,chg:0,trend:'—',dt:''},claims:{v:0,chg:0,trend:'—',dt:''},breakeven:{v:0,chg:0,trend:'—',dt:''},cpi:{v:0,chg:0,trend:'—',dt:''},oil:{v:0,chg:0,trend:'—',dt:''},dxy:{v:0,chg:0,trend:'—',dt:''},updated:''};
 // breadthDirty removed — data is read-only from Nexus
+
+// ── EXTENDED HOURS TRACKING ──────────────────────────────────────────────
+var POLYGON_KEY=localStorage.getItem('polygon_key')||'';
+var extHrsToggle=localStorage.getItem('apex_ext_hrs')==='true';
+var extHrsCache={};
+var EXT_CACHE_TTL=60000;
+var extHrsInterval=null;
+
+function getMarketSession(){
+  var est=new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
+  var day=est.getDay(),h=est.getHours(),m=est.getMinutes(),min=h*60+m;
+  if(day===0||day===6)return'closed';
+  if(min>=570&&min<960)return'rth';
+  if(min>=240&&min<570)return'pre';
+  if(min>=961&&min<1200)return'post';
+  return'closed';
+}
+
+async function fetchAllExtendedHours(){
+  if(!POLYGON_KEY)return;
+  var session=getMarketSession();
+  if(session==='rth'||session==='closed')return;
+  var tickers=INDEX_SYMS.filter(function(s){return!s.includes('=')&&!s.includes('.')&&s!=='VIX';});
+  stocks.forEach(function(s){if(tickers.indexOf(s.ticker)===-1)tickers.push(s.ticker);});
+  if(!tickers.length)return;
+  // Queue requests in batches of 5 to respect Polygon rate limits
+  for(var i=0;i<tickers.length;i+=5){
+    var batch=tickers.slice(i,i+5);
+    var fetches=batch.map(function(ticker){
+      return fetch('https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/'+ticker+'?apiKey='+POLYGON_KEY)
+        .then(function(r){return r.ok?r.json():null;})
+        .catch(function(){return null;});
+    });
+    try{
+      var results=await Promise.all(fetches);
+      results.forEach(function(json){
+        if(!json||!json.ticker)return;
+        var t=json.ticker;
+        var sym=t.ticker;
+        var result={preMarket:null,postMarket:null};
+        var lastClose=t.prevDay?t.prevDay.c:0;
+        var todayClose=t.day?t.day.c:lastClose;
+        if(session==='pre'&&t.preMarket!=null&&lastClose){
+          var chg=t.preMarket-lastClose;
+          result.preMarket={price:t.preMarket,change:chg,changePct:(chg/lastClose)*100};
+        }
+        if(session==='post'&&t.afterHours!=null&&todayClose){
+          var chg=t.afterHours-todayClose;
+          result.postMarket={price:t.afterHours,change:chg,changePct:(chg/todayClose)*100};
+        }
+        extHrsCache[sym]={data:result,timestamp:Date.now()};
+      });
+    }catch(e){console.warn('[APEX] Extended hours batch failed:',e.message);}
+    // If more batches remain, wait 60s to respect rate limit on free tier
+    if(i+5<tickers.length)await new Promise(function(r){setTimeout(r,60000);});
+  }
+  updateTickerScroll();
+  if(curPage==='watchlist')renderWatchlist();
+  console.log('[APEX] Extended hours data refreshed (',session,')');
+}
+
+function startExtHrsRefresh(){
+  if(extHrsInterval)clearInterval(extHrsInterval);
+  var session=getMarketSession();
+  if(session==='pre'||session==='post'){
+    fetchAllExtendedHours();
+    extHrsInterval=setInterval(function(){
+      var s=getMarketSession();
+      if(s==='pre'||s==='post'){fetchAllExtendedHours();}
+      else{clearInterval(extHrsInterval);extHrsInterval=null;extHrsCache={};}
+    },60000);
+  }
+}
+
+function getExtBadge(sym){
+  var ext=extHrsCache[sym]?extHrsCache[sym].data:null;
+  if(!ext)return'';
+  var session=getMarketSession();
+  if(session==='pre'&&ext.preMarket){
+    var p=ext.preMarket.changePct;
+    return'<span class="ticker-ext '+(p>=0?'cell-up':'cell-down')+'">PM: '+(p>=0?'+':'')+p.toFixed(2)+'%</span>';
+  }
+  if(session==='post'&&ext.postMarket){
+    var p=ext.postMarket.changePct;
+    return'<span class="ticker-ext '+(p>=0?'cell-up':'cell-down')+'">AH: '+(p>=0?'+':'')+p.toFixed(2)+'%</span>';
+  }
+  return'';
+}
+
+function getExtCell(ticker){
+  var ext=extHrsCache[ticker]?extHrsCache[ticker].data:null;
+  if(!ext)return'<td style="font-family:var(--font-mono);font-size:12px;color:var(--dim)">—</td>';
+  var session=getMarketSession();
+  var d=session==='pre'?ext.preMarket:session==='post'?ext.postMarket:null;
+  if(!d)return'<td style="font-family:var(--font-mono);font-size:12px;color:var(--dim)">—</td>';
+  var cls=d.changePct>=0?'cell-up':'cell-down';
+  return'<td style="font-family:var(--font-mono);font-size:12px"><span class="cell-price">$'+d.price.toFixed(2)+'</span> <span class="cell-pct '+cls+'" style="font-size:11px">'+(d.changePct>=0?'+':'')+d.changePct.toFixed(2)+'%</span></td>';
+}
+
+window.toggleExtHrs=function(){
+  extHrsToggle=!extHrsToggle;
+  localStorage.setItem('apex_ext_hrs',extHrsToggle?'true':'false');
+  var btn=document.getElementById('ext-toggle');
+  if(btn)btn.classList.toggle('active',extHrsToggle);
+  renderWatchlist();
+  if(extHrsToggle&&POLYGON_KEY)startExtHrsRefresh();
+};
+
+window.updatePolygon=function(){
+  var k=document.getElementById('set-polygon').value.trim();
+  if(!k)return;
+  POLYGON_KEY=k;
+  localStorage.setItem('polygon_key',k);
+  showToast('Polygon key saved','success');
+  startExtHrsRefresh();
+};
+// ── END EXTENDED HOURS ───────────────────────────────────────────────────
 
 var SECTIONS=[
 {id:'focus',dot:'var(--gold)',title:'FOCUS LIST',desc:'high-conviction names · core positions',defStage:'Stage 2',defSetup:'Consolidation'},
@@ -199,6 +321,10 @@ setTimeout(function(){fetchBreadthFromNexus();},2000);
 setTimeout(function(){fetchCOT();},3000);
 setTimeout(function(){fetchMacroFromNexus();},4000);
 setTimeout(function(){fetchRegimeScan();},5000);
+// Extended hours: restore toggle state and start refresh if applicable
+var extBtn=document.getElementById('ext-toggle');
+if(extBtn&&extHrsToggle)extBtn.classList.add('active');
+if(POLYGON_KEY)setTimeout(function(){startExtHrsRefresh();},6000);
 }
 window.switchPage=function(pg){curPage=pg;document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active');});document.getElementById('pg-'+pg).classList.add('active');document.querySelectorAll('.nav-tab').forEach(function(t){t.classList.toggle('active',t.dataset.page===pg);});if(pg==='dashboard')renderDashboard();if(pg==='watchlist')renderWatchlist();if(pg==='breadth')renderBreadth();if(pg==='macro')renderMacro();if(pg==='optcot')renderOptCot();};
 
@@ -225,7 +351,7 @@ function startSyncTimer(){if(syncTimer)clearInterval(syncTimer);syncTimer=setInt
 
 function updateClock(){var est=new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));var h=est.getHours(),m=est.getMinutes(),s=est.getSeconds();var clk=document.getElementById('clk');if(clk)clk.textContent=String(h%12||12).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')+' '+(h>=12?'PM':'AM')+' ET';var day=est.getDay(),min=h*60+m,el=document.getElementById('mkt');if(!el)return;if(day===0||day===6||min>=960){el.textContent='CLOSED';el.className='mkt-badge mkt-c';}else if(min>=570&&min<630){el.textContent='PRE-MKT';el.className='mkt-badge mkt-p';}else if(min>=630&&min<960){el.textContent='OPEN';el.className='mkt-badge mkt-o';}else{el.textContent='CLOSED';el.className='mkt-badge mkt-c';}}
 
-function updateTickerScroll(){var track=document.getElementById('ticker-track');if(!track)return;var items=INDEX_SYMS.map(function(sym){var d=prices[sym]||{};var pr=d.price?parseFloat(d.price):0;var ch=d.dayPct?parseFloat(d.dayPct):0;var cls=ch>=0?'cell-up arrow-up':'cell-down arrow-down';var label=sym==='CL=F'?'OIL':sym==='DX-Y.NYB'?'DXY':sym;return'<span class="ticker-item"><span class="ticker-sym">'+label+'</span> <span class="ticker-price">'+(pr>0?pr.toFixed(2):'—')+'</span> <span class="ticker-chg '+cls+'">'+(pr>0?((ch>=0?'+':'')+ch.toFixed(2)+'%'):'')+'</span></span>';}).join('');track.innerHTML=items+items;}
+function updateTickerScroll(){var track=document.getElementById('ticker-track');if(!track)return;var items=INDEX_SYMS.map(function(sym){var d=prices[sym]||{};var pr=d.price?parseFloat(d.price):0;var ch=d.dayPct?parseFloat(d.dayPct):0;var cls=ch>=0?'cell-up arrow-up':'cell-down arrow-down';var label=sym==='CL=F'?'OIL':sym==='DX-Y.NYB'?'DXY':sym;var extBadge=getExtBadge(sym);return'<span class="ticker-item"><span class="ticker-sym">'+label+'</span> <span class="ticker-price">'+(pr>0?pr.toFixed(2):'—')+'</span> <span class="ticker-chg '+cls+'">'+(pr>0?((ch>=0?'+':'')+ch.toFixed(2)+'%'):'')+'</span>'+extBadge+'</span>';}).join('');track.innerHTML=items+items;}
 
 // ── NEXUS PRICE ENGINE (Polygon via backend) ─────────────────────────────
 async function fetchAll(){
@@ -598,7 +724,7 @@ html+='<div class="section"><div class="section-hdr"><div class="section-dot" st
 html+='</select><input type="number" id="qa-rs-'+sec.id+'" placeholder="RS" min="0" max="99" style="width:44px;text-align:center"><select id="qa-wf-'+sec.id+'"><option value="">Setup...</option>';
 ['Base Breakout','Bull Flag','Consolidation','Stage 2 Entry','VCP','Basing','Pullback','Distribution','40-Week Hold'].forEach(function(wf){html+='<option'+(wf===sec.defSetup?' selected':'')+'>'+wf+'</option>';});
 html+='</select><button class="add-btn" onclick="quickAdd(\''+sec.id+'\')">+ Add</button></div></div>';
-if(!data.length){html+='<div class="section-table empty-table">No stocks — add one above</div>';}else{html+='<div class="section-table"><table><thead><tr><th>Ticker</th><th>Price</th><th>Day %</th><th>Week %</th><th>Month %</th><th>Stage</th><th>RS</th><th>Setup / Notes</th><th></th></tr></thead><tbody>';data.forEach(function(s){var price=gp(s.ticker),dv=dp(s.ticker),wv=wp(s.ticker),mv=mpp(s.ticker);var noteText=(s.wf?s.wf:'')+(s.wf&&s.notes?', ':'')+((s.notes||''));html+='<tr><td class="cell-ticker">'+s.ticker+'</td><td class="cell-price">'+(price>0?'$'+price.toFixed(2):'—')+'</td><td>'+pctCell(dv)+'</td><td>'+pctCell(wv)+'</td><td>'+pctCell(mv)+'</td><td><span class="stage-badge '+stageCls(s.stage)+'">'+stageLabel(s.stage)+'</span></td><td><span class="cell-rs" style="color:'+rsColor(s.rs)+'">'+(s.rs||0)+'</span></td><td class="cell-notes" title="'+(noteText||'')+'">'+(noteText||'—')+'</td><td><div class="row-actions"><button class="row-btn" onclick="openEdit('+s.id+')">✎ Edit</button><button class="row-btn row-btn-del" onclick="delStk('+s.id+')">✕</button></div></td></tr>';});html+='</tbody></table></div>';}html+='</div>';});el.innerHTML=html;updateTickerScroll();}
+if(!data.length){html+='<div class="section-table empty-table">No stocks — add one above</div>';}else{html+='<div class="section-table"><table><thead><tr><th>Ticker</th><th>Price</th>'+(extHrsToggle?'<th>EXT</th>':'')+'<th>Day %</th><th>Week %</th><th>Month %</th><th>Stage</th><th>RS</th><th>Setup / Notes</th><th></th></tr></thead><tbody>';data.forEach(function(s){var price=gp(s.ticker),dv=dp(s.ticker),wv=wp(s.ticker),mv=mpp(s.ticker);var noteText=(s.wf?s.wf:'')+(s.wf&&s.notes?', ':'')+((s.notes||''));html+='<tr><td class="cell-ticker">'+s.ticker+'</td><td class="cell-price">'+(price>0?'$'+price.toFixed(2):'—')+'</td>'+(extHrsToggle?getExtCell(s.ticker):'')+'<td>'+pctCell(dv)+'</td><td>'+pctCell(wv)+'</td><td>'+pctCell(mv)+'</td><td><span class="stage-badge '+stageCls(s.stage)+'">'+stageLabel(s.stage)+'</span></td><td><span class="cell-rs" style="color:'+rsColor(s.rs)+'">'+(s.rs||0)+'</span></td><td class="cell-notes" title="'+(noteText||'')+'">'+(noteText||'—')+'</td><td><div class="row-actions"><button class="row-btn" onclick="openEdit('+s.id+')">✎ Edit</button><button class="row-btn row-btn-del" onclick="delStk('+s.id+')">✕</button></div></td></tr>';});html+='</tbody></table></div>';}html+='</div>';});el.innerHTML=html;updateTickerScroll();}
 
 window.quickAdd=async function(secId){var ticker=(document.getElementById('qa-tk-'+secId)||{}).value;if(!ticker||!ticker.trim()){showToast('Enter a ticker','err');return;}ticker=ticker.trim().toUpperCase();var stock={id:Date.now(),ticker:ticker,company:'',sector:'',list:secId,stage:(document.getElementById('qa-st-'+secId)||{}).value||'Stage 2',rs:parseInt((document.getElementById('qa-rs-'+secId)||{}).value)||0,ema:'yes',a50:'yes',alertA:0,alertB:0,notes:'',wf:(document.getElementById('qa-wf-'+secId)||{}).value||'',rsh:'no',addedDate:new Date().toISOString().split('T')[0]};try{var r=await fetch(NEXUS_API+'/api/prices/search?q='+encodeURIComponent(ticker));var d=await r.json();if(d&&d.name){stock.company=d.name;}if(d&&d.sector){stock.sector=d.sector;}}catch(e){}stocks.unshift(stock);renderWatchlist();var inp=document.getElementById('qa-tk-'+secId);if(inp)inp.value='';var rsInp=document.getElementById('qa-rs-'+secId);if(rsInp)rsInp.value='';try{await saveToBin();showToast(ticker+' added','success');}catch(e){showToast('Saved locally','err');}};
 
@@ -632,7 +758,7 @@ window.undoDelete=function(){
 };
 window.lookupTk=async function(){var t=document.getElementById('f-tk').value.trim().toUpperCase();if(!t){setLU('Enter ticker','err');return;}var btn=document.getElementById('lu-btn');btn.disabled=true;btn.textContent='...';try{var r=await fetch(NEXUS_API+'/api/prices/search?q='+encodeURIComponent(t));var d=await r.json();if(d&&d.name){document.getElementById('f-co').value=d.name;if(d.sector){document.getElementById('f-se').value=d.sector;}setLU('✓ '+d.name,'ok');}else setLU('Not found','err');}catch(e){setLU('Failed','err');}btn.disabled=false;btn.textContent='Lookup';};
 
-window.openSettings=function(){document.getElementById('set-jb').value=JB_KEY;document.getElementById('set-fred').value=FRED_KEY;document.getElementById('set-mo').classList.add('open');};
+window.openSettings=function(){document.getElementById('set-jb').value=JB_KEY;document.getElementById('set-fred').value=FRED_KEY;document.getElementById('set-polygon').value=POLYGON_KEY;document.getElementById('set-mo').classList.add('open');};
 window.closeSet=function(){document.getElementById('set-mo').classList.remove('open');};
 window.updateJB=async function(){var k=document.getElementById('set-jb').value.trim();if(!k)return;JB_KEY=k;localStorage.setItem('jb_key',k);showToast('JSONBin key updated','success');pullFromBin();};
 window.clearAll=async function(){if(!confirm('Delete ALL stocks?'))return;stocks=[];await saveToBin();prices={};wkO={};moO={};window.closeSet();renderWatchlist();showToast('Deleted','err');};
