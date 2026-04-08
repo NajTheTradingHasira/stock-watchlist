@@ -185,8 +185,7 @@ var macro=JSON.parse(localStorage.getItem('apex_macro')||'null')||{t10y:{v:0,chg
 // ── EXTENDED HOURS TRACKING ──────────────────────────────────────────────
 var POLYGON_KEY=localStorage.getItem('polygon_key')||'';
 var extHrsToggle=localStorage.getItem('apex_ext_hrs')==='true';
-var extHrsCache={};
-var EXT_CACHE_TTL=60000;
+var extHrsCache=JSON.parse(localStorage.getItem('apex_ext_data')||'{}');
 var extHrsInterval=null;
 
 function getMarketSession(){
@@ -199,6 +198,27 @@ function getMarketSession(){
   return'closed';
 }
 
+function getETDateStr(){
+  var est=new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
+  return est.getFullYear()+'-'+String(est.getMonth()+1).padStart(2,'0')+'-'+String(est.getDate()).padStart(2,'0');
+}
+
+function clearStaleExtData(){
+  var today=getETDateStr();
+  var cleared=false;
+  Object.keys(extHrsCache).forEach(function(sym){
+    if(extHrsCache[sym].date&&extHrsCache[sym].date<today){
+      delete extHrsCache[sym];
+      cleared=true;
+    }
+  });
+  if(cleared){saveExtCache();console.log('[APEX] Cleared stale extended hours data');}
+}
+
+function saveExtCache(){
+  localStorage.setItem('apex_ext_data',JSON.stringify(extHrsCache));
+}
+
 async function fetchAllExtendedHours(){
   if(!POLYGON_KEY)return;
   var session=getMarketSession();
@@ -206,7 +226,7 @@ async function fetchAllExtendedHours(){
   var tickers=INDEX_SYMS.filter(function(s){return!s.includes('=')&&!s.includes('.')&&s!=='VIX';});
   stocks.forEach(function(s){if(tickers.indexOf(s.ticker)===-1)tickers.push(s.ticker);});
   if(!tickers.length)return;
-  // Queue requests in batches of 5 to respect Polygon rate limits
+  var today=getETDateStr();
   for(var i=0;i<tickers.length;i+=5){
     var batch=tickers.slice(i,i+5);
     var fetches=batch.map(function(ticker){
@@ -220,23 +240,21 @@ async function fetchAllExtendedHours(){
         if(!json||!json.ticker)return;
         var t=json.ticker;
         var sym=t.ticker;
-        var result={preMarket:null,postMarket:null};
         var lastClose=t.prevDay?t.prevDay.c:0;
         var todayClose=t.day?t.day.c:lastClose;
         if(session==='pre'&&t.preMarket!=null&&lastClose){
           var chg=t.preMarket-lastClose;
-          result.preMarket={price:t.preMarket,change:chg,changePct:(chg/lastClose)*100};
+          extHrsCache[sym]={session:'pre',price:t.preMarket,changePct:(chg/lastClose)*100,date:today};
         }
         if(session==='post'&&t.afterHours!=null&&todayClose){
           var chg=t.afterHours-todayClose;
-          result.postMarket={price:t.afterHours,change:chg,changePct:(chg/todayClose)*100};
+          extHrsCache[sym]={session:'post',price:t.afterHours,changePct:(chg/todayClose)*100,date:today};
         }
-        extHrsCache[sym]={data:result,timestamp:Date.now()};
       });
     }catch(e){console.warn('[APEX] Extended hours batch failed:',e.message);}
-    // If more batches remain, wait 60s to respect rate limit on free tier
     if(i+5<tickers.length)await new Promise(function(r){setTimeout(r,60000);});
   }
+  saveExtCache();
   updateTickerScroll();
   if(curPage==='watchlist')renderWatchlist();
   console.log('[APEX] Extended hours data refreshed (',session,')');
@@ -244,40 +262,32 @@ async function fetchAllExtendedHours(){
 
 function startExtHrsRefresh(){
   if(extHrsInterval)clearInterval(extHrsInterval);
+  clearStaleExtData();
   var session=getMarketSession();
   if(session==='pre'||session==='post'){
     fetchAllExtendedHours();
     extHrsInterval=setInterval(function(){
       var s=getMarketSession();
       if(s==='pre'||s==='post'){fetchAllExtendedHours();}
-      else{clearInterval(extHrsInterval);extHrsInterval=null;extHrsCache={};}
+      else{clearInterval(extHrsInterval);extHrsInterval=null;}
     },60000);
   }
 }
 
 function getExtBadge(sym){
-  var ext=extHrsCache[sym]?extHrsCache[sym].data:null;
-  if(!ext)return'';
-  var session=getMarketSession();
-  if(session==='pre'&&ext.preMarket){
-    var p=ext.preMarket.changePct;
-    return'<span class="ticker-ext '+(p>=0?'cell-up':'cell-down')+'">PM: '+(p>=0?'+':'')+p.toFixed(2)+'%</span>';
-  }
-  if(session==='post'&&ext.postMarket){
-    var p=ext.postMarket.changePct;
-    return'<span class="ticker-ext '+(p>=0?'cell-up':'cell-down')+'">AH: '+(p>=0?'+':'')+p.toFixed(2)+'%</span>';
-  }
-  return'';
+  var ext=extHrsCache[sym];
+  if(!ext||ext.date!==getETDateStr())return'';
+  var label=ext.session==='pre'?'PM':'AH';
+  var p=ext.changePct;
+  return'<span class="ticker-ext '+(p>=0?'cell-up':'cell-down')+'">'+label+': '+(p>=0?'+':'')+p.toFixed(2)+'%</span>';
 }
 
 function getExtCell(ticker){
-  var ext=extHrsCache[ticker]?extHrsCache[ticker].data:null;
-  if(!ext)return'<td style="font-family:var(--font-mono);font-size:12px;color:var(--dim)">—</td>';
-  var session=getMarketSession();
-  var d=session==='pre'?ext.preMarket:session==='post'?ext.postMarket:null;
-  if(!d)return'<td style="font-family:var(--font-mono);font-size:12px;color:var(--dim)">—</td>';
-  var cls=d.changePct>=0?'cell-up':'cell-down';
-  return'<td style="font-family:var(--font-mono);font-size:12px"><span class="cell-price">$'+d.price.toFixed(2)+'</span> <span class="cell-pct '+cls+'" style="font-size:11px">'+(d.changePct>=0?'+':'')+d.changePct.toFixed(2)+'%</span></td>';
+  var ext=extHrsCache[ticker];
+  if(!ext||ext.date!==getETDateStr())return'<td style="font-family:var(--font-mono);font-size:12px;color:var(--dim)">—</td>';
+  var label=ext.session==='pre'?'PM':'AH';
+  var cls=ext.changePct>=0?'cell-up':'cell-down';
+  return'<td style="font-family:var(--font-mono);font-size:12px"><span style="color:var(--dim);font-size:10px">'+label+'</span> <span class="cell-price">$'+ext.price.toFixed(2)+'</span> <span class="cell-pct '+cls+'" style="font-size:11px">'+(ext.changePct>=0?'+':'')+ext.changePct.toFixed(2)+'%</span></td>';
 }
 
 window.toggleExtHrs=function(){
