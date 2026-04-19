@@ -95,6 +95,14 @@ tbody tr:last-child td{border-bottom:none;}tbody tr:hover td{background:rgba(255
 .stage-s4,.stage-s4a,.stage-s4b{background:rgba(239,68,68,.1);color:var(--red);border:1px solid rgba(239,68,68,.2);}
 .cell-rs{font-family:var(--font-mono);font-weight:800;font-size:13px;}
 .cell-notes{color:var(--muted);font-size:12px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cell-ants{font-family:var(--font-mono);font-weight:800;font-size:12px;display:inline-flex;align-items:center;gap:4px;cursor:help;}
+.ants-score{padding:2px 6px;border-radius:3px;letter-spacing:.3px;}
+.ants-s-hi{background:rgba(34,197,94,.15);color:var(--green);border:1px solid rgba(34,197,94,.25);}
+.ants-s-md{background:rgba(234,179,8,.12);color:var(--gold);border:1px solid rgba(234,179,8,.22);}
+.ants-s-lo{background:rgba(100,116,139,.1);color:var(--muted);border:1px solid rgba(100,116,139,.2);}
+.ants-flag{font-size:13px;filter:drop-shadow(0 0 3px rgba(34,197,94,.4));}
+.cell-ants-pending{color:var(--dim);font-family:var(--font-mono);font-size:11px;}
+.cell-ants-na{color:var(--dim);font-family:var(--font-mono);font-size:12px;}
 .row-actions{display:flex;gap:4px;}.row-btn{background:none;border:1px solid var(--border);border-radius:3px;color:var(--dim);padding:3px 8px;cursor:pointer;font-size:11px;font-family:var(--font-mono);}
 .row-btn:hover{border-color:var(--accent);color:var(--accent);}.row-btn-del:hover{border-color:var(--red);color:var(--red);}
 .search-bar{display:flex;align-items:center;gap:10px;margin-bottom:20px;}
@@ -309,6 +317,156 @@ window.updatePolygon=function(){
 };
 // ── END EXTENDED HOURS ───────────────────────────────────────────────────
 
+// ── ANTS (Advance w/ No Trouble Signs) ───────────────────────────────────
+// Two-layer architecture:
+//   Layer 1 — Strict flag (O'Neil classic): ≥12/15 up days, ≥20% gain,
+//             volRatio ≥0.55 (accumulation dominance), CIR mean on up days ≥0.60
+//   Layer 2 — Score 0-100 (weighted): up-days 30, gain 20, volRatio 20, CIR 15, R² 15
+// Purpose: filter leaders under sustained institutional accumulation over ~3 weeks.
+// Not an entry signal — surfaces candidates; wait for consolidation/pullback to execute.
+// Data source: Polygon aggregates (daily, adjusted). Cached per-session in memory.
+// Contract is identical to the companion Python module in nexus-backend — if/when
+// compute is moved server-side, swap the fetch URL; UI renderer stays unchanged.
+var antsCache={};   // ticker -> {ts, flag, score, components, sufficient, stale}
+var antsInflight={};// ticker -> Promise (dedupes concurrent fetches)
+var ANTS_TTL_MS=6*60*60*1000; // 6h: intra-day re-refresh on manual ref; full recompute next session
+var ANTS_WINDOW=15; // trailing return days — keep this constant, thresholds are calibrated to it
+
+// Linear regression R² of y vs x (both arrays, same length).
+function _antsR2(y){
+  var n=y.length;if(n<3)return 0;
+  var sx=0,sy=0,sxx=0,syy=0,sxy=0;
+  for(var i=0;i<n;i++){var xi=i,yi=y[i];sx+=xi;sy+=yi;sxx+=xi*xi;syy+=yi*yi;sxy+=xi*yi;}
+  var num=n*sxy-sx*sy;var denX=n*sxx-sx*sx;var denY=n*syy-sy*sy;
+  if(denX<=0||denY<=0)return 0;
+  var r=num/Math.sqrt(denX*denY);return r*r;
+}
+
+// Pure compute: given array of {o,h,l,c,v} bars (chronological, oldest→newest),
+// returns {flag, score, components, sufficient}. Requires ≥ANTS_WINDOW+1 bars.
+function computeANTS(bars){
+  if(!bars||bars.length<ANTS_WINDOW+1)return{flag:false,score:null,components:null,sufficient:false};
+  var w=bars.slice(-(ANTS_WINDOW+1)); // last 16 bars → 15 return periods
+  var upDays=0,upVol=0,downVol=0,cirSum=0,cirCount=0;var closes=[];
+  for(var i=1;i<w.length;i++){
+    var b=w[i],p=w[i-1];
+    var isUp=b.c>p.c;
+    if(isUp){upDays++;upVol+=b.v||0;}else{downVol+=b.v||0;}
+    var rng=b.h-b.l;
+    var cir=rng>0?(b.c-b.l)/rng:0.5;
+    if(isUp){cirSum+=cir;cirCount++;}
+  }
+  for(var j=0;j<w.length;j++){closes.push(Math.log(Math.max(w[j].c,1e-9)));}
+  // Compute gain as (last-first)/first to avoid the fp artifact of (last/first-1)
+  var gainPct=(w[w.length-1].c-w[0].c)/w[0].c*100;
+  var totalVol=upVol+downVol;
+  var volRatio=totalVol>0?upVol/totalVol:0;
+  var cirUp=cirCount>0?cirSum/cirCount:0;
+  var r2=_antsR2(closes);
+  // Layer 1 — strict flag (small epsilon for inclusive fp boundaries)
+  var EPS=1e-9;
+  var flag=(upDays>=12)&&(gainPct>=20-EPS)&&(volRatio>=0.55-EPS)&&(cirUp>=0.60-EPS);
+  // Layer 2 — weighted score. R² and CIR only credit when advancing — a smooth
+  // downtrend isn't accumulation; CIR needs ≥8 up days for full credit.
+  var sUp=Math.min(upDays/15,1)*30;
+  var sGain=Math.min(Math.max(gainPct,0)/30,1)*20;
+  var sVol=Math.max(0,Math.min(1,(volRatio-0.40)/0.30))*20;
+  var cirSampleWeight=Math.min(upDays/8,1);
+  var sCIR=Math.max(0,Math.min(1,(cirUp-0.30)/0.40))*15*cirSampleWeight;
+  var sR2=Math.max(0,Math.min(1,r2))*15*(gainPct>0?1:0);
+  var score=Math.round(sUp+sGain+sVol+sCIR+sR2);
+  return{
+    flag:flag,score:score,sufficient:true,
+    components:{upDays:upDays,gainPct:Math.round(gainPct*10)/10,volRatio:Math.round(volRatio*100)/100,cirUp:Math.round(cirUp*100)/100,r2:Math.round(r2*100)/100}
+  };
+}
+
+// Fetch daily aggregates from Polygon for one ticker, trailing ~35 calendar days.
+async function _antsFetchBars(ticker){
+  if(!POLYGON_KEY)return null;
+  var today=new Date();
+  var from=new Date(today.getTime()-35*24*60*60*1000);
+  var fmt=function(d){return d.toISOString().split('T')[0];};
+  var url='https://api.polygon.io/v2/aggs/ticker/'+encodeURIComponent(ticker)+'/range/1/day/'+fmt(from)+'/'+fmt(today)+'?adjusted=true&sort=asc&limit=50&apiKey='+POLYGON_KEY;
+  try{
+    var r=await fetch(url);
+    if(!r.ok)return null;
+    var d=await r.json();
+    if(!d||!d.results||!d.results.length)return null;
+    return d.results.map(function(x){return{o:x.o,h:x.h,l:x.l,c:x.c,v:x.v};});
+  }catch(e){console.warn('[APEX] ANTS fetch failed for '+ticker+':',e.message);return null;}
+}
+
+// Fetch + compute ANTS for one ticker, with in-memory cache + inflight dedupe.
+async function antsForTicker(ticker,force){
+  var now=Date.now();
+  var cached=antsCache[ticker];
+  if(!force&&cached&&(now-cached.ts)<ANTS_TTL_MS)return cached;
+  if(antsInflight[ticker])return antsInflight[ticker];
+  antsInflight[ticker]=(async function(){
+    var bars=await _antsFetchBars(ticker);
+    var result;
+    if(!bars){result={ts:now,flag:false,score:null,components:null,sufficient:false,stale:true};}
+    else{var c=computeANTS(bars);result={ts:now,flag:c.flag,score:c.score,components:c.components,sufficient:c.sufficient,stale:false};}
+    antsCache[ticker]=result;
+    delete antsInflight[ticker];
+    return result;
+  })();
+  return antsInflight[ticker];
+}
+
+// Batch-fetch for the full watchlist. Throttles to 5 concurrent to respect
+// Polygon free-tier rate limit (5/min) — premium users can raise ANTS_CONCURRENCY.
+var ANTS_CONCURRENCY=25; // Polygon Stocks tier — unlimited calls; drop to 5 if on free tier
+var antsSortMode=localStorage.getItem('apex_ants_sort')||'off'; // 'off' | 'desc'
+window.toggleAntsSort=function(){antsSortMode=(antsSortMode==='off')?'desc':'off';localStorage.setItem('apex_ants_sort',antsSortMode);renderWatchlist();};
+async function fetchAllANTS(opts){
+  opts=opts||{};
+  var tickers=[...new Set(stocks.map(function(s){return s.ticker;}))];
+  if(!tickers.length)return;
+  if(!POLYGON_KEY){console.warn('[APEX] ANTS skipped — no Polygon key');return;}
+  var queue=tickers.slice();
+  var workers=[];
+  var completed=0;
+  var total=queue.length;
+  for(var w=0;w<Math.min(ANTS_CONCURRENCY,queue.length);w++){
+    workers.push((async function(){
+      while(queue.length){
+        var t=queue.shift();
+        if(!t)break;
+        await antsForTicker(t,!!opts.force);
+        completed++;
+        // Live re-render roughly every 5 completions to avoid thrash
+        if(curPage==='watchlist'&&(completed%5===0||completed===total))renderWatchlist();
+      }
+    })());
+  }
+  await Promise.all(workers);
+  if(curPage==='watchlist')renderWatchlist();
+  console.log('[APEX] ANTS refreshed for '+total+' tickers');
+}
+
+// Cell renderer. Score badge + ant icon when strict flag fires.
+// Hover tooltip exposes all 5 components — power-user can inspect drivers.
+function antsCell(ticker){
+  if(!POLYGON_KEY)return'<span class="cell-ants-na" title="ANTS requires Polygon key (Settings)">—</span>';
+  var a=antsCache[ticker];
+  if(!a)return'<span class="cell-ants-pending">…</span>';
+  if(!a.sufficient||a.score==null)return'<span class="cell-ants-na" title="Insufficient history or data unavailable">—</span>';
+  var c=a.components||{};
+  var cls=a.score>=70?'ants-s-hi':a.score>=50?'ants-s-md':'ants-s-lo';
+  var tip='ANTS — 15-day institutional accumulation filter\n'+
+    'Score: '+a.score+'/100'+(a.flag?' · STRICT FLAG ✓':'')+'\n'+
+    '• Up days: '+c.upDays+'/15 (need ≥12)\n'+
+    '• Gain: '+(c.gainPct>=0?'+':'')+c.gainPct+'% (need ≥20%)\n'+
+    '• Vol ratio (up/total): '+c.volRatio+' (need ≥0.55)\n'+
+    '• CIR on up days: '+c.cirUp+' (need ≥0.60)\n'+
+    '• Trend R²: '+c.r2;
+  var flagHtml=a.flag?'<span class="ants-flag">🐜</span>':'';
+  return'<span class="cell-ants" title="'+tip.replace(/"/g,'&quot;')+'"><span class="ants-score '+cls+'">'+a.score+'</span>'+flagHtml+'</span>';
+}
+// ── END ANTS ─────────────────────────────────────────────────────────────
+
 var SECTIONS=[
 {id:'focus',dot:'var(--gold)',title:'FOCUS LIST',desc:'high-conviction names · core positions',defStage:'Stage 2',defSetup:'Consolidation'},
 {id:'bullsnort',dot:'var(--green)',title:'BULLSNORT',desc:'daily chart triggers · flags, breakouts, momentum',defStage:'Stage 2',defSetup:'Bull Flag'},
@@ -406,6 +564,8 @@ async function fetchAll(){
   if(curPage==='dashboard')renderDashboard();
   if(curPage==='watchlist')renderWatchlist();
   document.getElementById('spin').style.display='none';
+  // Kick off ANTS refresh in the background — does not block other data
+  if(POLYGON_KEY)fetchAllANTS();
 }
 function startRefTimer(){if(refTimer)clearInterval(refTimer);var bar=document.getElementById('rprog');countdown=refInt;refTimer=setInterval(function(){countdown--;if(bar)bar.style.width=(countdown/refInt*100)+'%';if(countdown<=0){countdown=refInt;if(autoRef)fetchAll();}},1000);}
 window.manualRef=function(){fetchAll();countdown=refInt;};
@@ -734,9 +894,9 @@ html+='<div class="section"><div class="section-hdr"><div class="section-dot" st
 html+='</select><input type="number" id="qa-rs-'+sec.id+'" placeholder="RS" min="0" max="99" style="width:44px;text-align:center"><select id="qa-wf-'+sec.id+'"><option value="">Setup...</option>';
 ['Base Breakout','Bull Flag','Consolidation','Stage 2 Entry','VCP','Basing','Pullback','Distribution','40-Week Hold'].forEach(function(wf){html+='<option'+(wf===sec.defSetup?' selected':'')+'>'+wf+'</option>';});
 html+='</select><button class="add-btn" onclick="quickAdd(\''+sec.id+'\')">+ Add</button></div></div>';
-if(!data.length){html+='<div class="section-table empty-table">No stocks — add one above</div>';}else{html+='<div class="section-table"><table><thead><tr><th>Ticker</th><th>Price</th>'+(extHrsToggle?'<th>EXT</th>':'')+'<th>Day %</th><th>Week %</th><th>Month %</th><th>Stage</th><th>RS</th><th>Setup / Notes</th><th></th></tr></thead><tbody>';data.forEach(function(s){var price=gp(s.ticker),dv=dp(s.ticker),wv=wp(s.ticker),mv=mpp(s.ticker);var noteText=(s.wf?s.wf:'')+(s.wf&&s.notes?', ':'')+((s.notes||''));html+='<tr><td class="cell-ticker">'+s.ticker+'</td><td class="cell-price">'+(price>0?'$'+price.toFixed(2):'—')+'</td>'+(extHrsToggle?getExtCell(s.ticker):'')+'<td>'+pctCell(dv)+'</td><td>'+pctCell(wv)+'</td><td>'+pctCell(mv)+'</td><td><span class="stage-badge '+stageCls(s.stage)+'">'+stageLabel(s.stage)+'</span></td><td><span class="cell-rs" style="color:'+rsColor(s.rs)+'">'+(s.rs||0)+'</span></td><td class="cell-notes" title="'+(noteText||'')+'">'+(noteText||'—')+'</td><td><div class="row-actions"><button class="row-btn" onclick="openEdit('+s.id+')">✎ Edit</button><button class="row-btn row-btn-del" onclick="delStk('+s.id+')">✕</button></div></td></tr>';});html+='</tbody></table></div>';}html+='</div>';});el.innerHTML=html;updateTickerScroll();}
+if(!data.length){html+='<div class="section-table empty-table">No stocks — add one above</div>';}else{if(antsSortMode==='desc'){data=data.slice().sort(function(a,b){var sa=(antsCache[a.ticker]||{}).score;var sb=(antsCache[b.ticker]||{}).score;sa=(sa==null)?-1:sa;sb=(sb==null)?-1:sb;if(sb!==sa)return sb-sa;var fa=(antsCache[a.ticker]||{}).flag?1:0;var fb=(antsCache[b.ticker]||{}).flag?1:0;return fb-fa;});}var antsHdr='<th title="ANTS — 15-day institutional accumulation filter. Score 0-100; ant icon = strict O\'Neil flag. Click to '+(antsSortMode==='desc'?'clear sort':'sort by score desc')+'." style="cursor:pointer;user-select:none" onclick="toggleAntsSort()">ANTS'+(antsSortMode==='desc'?' ↓':'')+'</th>';html+='<div class="section-table"><table><thead><tr><th>Ticker</th><th>Price</th>'+(extHrsToggle?'<th>EXT</th>':'')+'<th>Day %</th><th>Week %</th><th>Month %</th><th>Stage</th><th>RS</th>'+antsHdr+'<th>Setup / Notes</th><th></th></tr></thead><tbody>';data.forEach(function(s){var price=gp(s.ticker),dv=dp(s.ticker),wv=wp(s.ticker),mv=mpp(s.ticker);var noteText=(s.wf?s.wf:'')+(s.wf&&s.notes?', ':'')+((s.notes||''));html+='<tr><td class="cell-ticker">'+s.ticker+'</td><td class="cell-price">'+(price>0?'$'+price.toFixed(2):'—')+'</td>'+(extHrsToggle?getExtCell(s.ticker):'')+'<td>'+pctCell(dv)+'</td><td>'+pctCell(wv)+'</td><td>'+pctCell(mv)+'</td><td><span class="stage-badge '+stageCls(s.stage)+'">'+stageLabel(s.stage)+'</span></td><td><span class="cell-rs" style="color:'+rsColor(s.rs)+'">'+(s.rs||0)+'</span></td><td>'+antsCell(s.ticker)+'</td><td class="cell-notes" title="'+(noteText||'')+'">'+(noteText||'—')+'</td><td><div class="row-actions"><button class="row-btn" onclick="openEdit('+s.id+')">✎ Edit</button><button class="row-btn row-btn-del" onclick="delStk('+s.id+')">✕</button></div></td></tr>';});html+='</tbody></table></div>';}html+='</div>';});el.innerHTML=html;updateTickerScroll();}
 
-window.quickAdd=async function(secId){var ticker=(document.getElementById('qa-tk-'+secId)||{}).value;if(!ticker||!ticker.trim()){showToast('Enter a ticker','err');return;}ticker=ticker.trim().toUpperCase();var stock={id:Date.now(),ticker:ticker,company:'',sector:'',list:secId,stage:(document.getElementById('qa-st-'+secId)||{}).value||'Stage 2',rs:parseInt((document.getElementById('qa-rs-'+secId)||{}).value)||0,ema:'yes',a50:'yes',alertA:0,alertB:0,notes:'',wf:(document.getElementById('qa-wf-'+secId)||{}).value||'',rsh:'no',addedDate:new Date().toISOString().split('T')[0]};try{var r=await fetch(NEXUS_API+'/api/prices/search?q='+encodeURIComponent(ticker));var d=await r.json();if(d&&d.name){stock.company=d.name;}if(d&&d.sector){stock.sector=d.sector;}}catch(e){}stocks.unshift(stock);renderWatchlist();var inp=document.getElementById('qa-tk-'+secId);if(inp)inp.value='';var rsInp=document.getElementById('qa-rs-'+secId);if(rsInp)rsInp.value='';try{await saveToBin();showToast(ticker+' added','success');}catch(e){showToast('Saved locally','err');}};
+window.quickAdd=async function(secId){var ticker=(document.getElementById('qa-tk-'+secId)||{}).value;if(!ticker||!ticker.trim()){showToast('Enter a ticker','err');return;}ticker=ticker.trim().toUpperCase();var stock={id:Date.now(),ticker:ticker,company:'',sector:'',list:secId,stage:(document.getElementById('qa-st-'+secId)||{}).value||'Stage 2',rs:parseInt((document.getElementById('qa-rs-'+secId)||{}).value)||0,ema:'yes',a50:'yes',alertA:0,alertB:0,notes:'',wf:(document.getElementById('qa-wf-'+secId)||{}).value||'',rsh:'no',addedDate:new Date().toISOString().split('T')[0]};try{var r=await fetch(NEXUS_API+'/api/prices/search?q='+encodeURIComponent(ticker));var d=await r.json();if(d&&d.name){stock.company=d.name;}if(d&&d.sector){stock.sector=d.sector;}}catch(e){}stocks.unshift(stock);renderWatchlist();var inp=document.getElementById('qa-tk-'+secId);if(inp)inp.value='';var rsInp=document.getElementById('qa-rs-'+secId);if(rsInp)rsInp.value='';if(POLYGON_KEY)antsForTicker(ticker).then(function(){if(curPage==='watchlist')renderWatchlist();});try{await saveToBin();showToast(ticker+' added','success');}catch(e){showToast('Saved locally','err');}};
 
 window.openEdit=function(id){editId=id;var s=stocks.find(function(x){return String(x.id)===String(id);});if(!s)return;document.getElementById('mo-title').textContent='Edit '+s.ticker;document.getElementById('f-tk').value=s.ticker;document.getElementById('f-co').value=s.company||'';document.getElementById('f-se').value=s.sector||'';var editList=({weekly:'focus',daily:'bullsnort'})[s.list]||s.list||'focus';document.getElementById('f-li').value=editList;document.getElementById('f-st').value=s.stage||'Stage 2';document.getElementById('f-rs').value=s.rs||'';document.getElementById('f-em').value=s.ema||'yes';document.getElementById('f-50').value=s.a50||'yes';document.getElementById('f-aa').value=s.alertA||'';document.getElementById('f-ab').value=s.alertB||'';document.getElementById('f-nt').value=s.notes||'';document.getElementById('f-wf').value=s.wf||'';document.getElementById('f-rsh').value=s.rsh||'no';setLU('','');document.getElementById('stock-mo').classList.add('open');};
 window.closeSMo=function(){document.getElementById('stock-mo').classList.remove('open');editId=null;};
