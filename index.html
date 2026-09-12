@@ -72,6 +72,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-sans);font-si
 .section-hdr{display:flex;align-items:center;gap:10px;padding:12px 16px;background:var(--s1);border:1px solid var(--border);border-radius:8px 8px 0 0;flex-wrap:wrap;}
 .section-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}.section-title{font-family:var(--font-mono);font-weight:800;font-size:13px;letter-spacing:.5px;text-transform:uppercase;}
 .section-desc{color:var(--dim);font-size:12px;font-family:var(--font-mono);}.section-count{background:var(--s3);color:var(--muted);font-family:var(--font-mono);font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;}
+.grp-dots{display:inline-flex;gap:3px;margin-left:6px;vertical-align:middle;}.grp-dot{width:6px;height:6px;border-radius:50%;display:inline-block;opacity:.85;}.sec-checks{display:flex;flex-wrap:wrap;gap:6px 14px;padding:6px 0;}.sec-checks label{display:flex;align-items:center;gap:6px;font-size:12px;font-family:var(--font-mono);cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);}.sec-checks input{accent-color:var(--accent);width:14px;height:14px;margin:0;}
 .section-spacer{flex:1;}.section-add{display:flex;align-items:center;gap:6px;flex-shrink:0;}
 .section-add input{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:6px 10px;color:var(--text);font-family:var(--font-mono);font-size:12px;font-weight:700;width:80px;text-transform:uppercase;}
 .section-add input:focus{outline:none;border-color:var(--accent);}
@@ -162,7 +163,7 @@ tbody tr:last-child td{border-bottom:none;}tbody tr:hover td{background:rgba(255
 <div class="ff full"><label>Ticker</label><div class="lr"><input type="text" id="f-tk" placeholder="AAPL" style="text-transform:uppercase;font-weight:800;font-family:var(--font-mono)" oninput="this.value=this.value.toUpperCase()"><button class="lb" id="lu-btn" onclick="lookupTk()">Lookup</button></div><div class="ls" id="lu-st"></div></div>
 <div class="ff"><label>Company</label><input type="text" id="f-co" placeholder="Auto-filled"></div>
 <div class="ff"><label>Sector</label><select id="f-se"><option value="">Select...</option><option>Technology</option><option>Healthcare</option><option>Financials</option><option>Consumer Disc.</option><option>Industrials</option><option>Energy</option><option>Materials</option><option>Real Estate</option><option>Utilities</option><option>Communication</option><option>Consumer Staples</option></select></div>
-<div class="ff"><label>Section</label><select id="f-li"><option value="focus">Focus List</option><option value="bullsnort">Bullsnort</option><option value="ondeck">On Deck</option><option value="topdog">Top Dog</option><option value="rs">Relative Strength</option><option value="insiderbuy">Weekly Focus List</option><option value="insidersell">Weekly Focus Pivot List</option><option value="shorts">Shorts</option></select></div>
+<div class="ff full"><label>Groups <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">— one record, shown in every checked group</span></label><div class="sec-checks" id="f-li"></div></div>
 <div class="ff"><label>Stage</label><select id="f-st"><option value="Stage 1">Stage 1</option><option value="Stage 1A">Stage 1A</option><option value="Stage 1B">Stage 1B</option><option value="Stage 2" selected>Stage 2</option><option value="Stage 2A">Stage 2A</option><option value="Stage 2B">Stage 2B</option><option value="Stage 3">Stage 3</option><option value="Stage 3A">Stage 3A</option><option value="Stage 3B">Stage 3B</option><option value="Stage 4">Stage 4</option><option value="Stage 4A">Stage 4A</option><option value="Stage 4B">Stage 4B</option></select></div>
 <div class="ff"><label>RS (0-99)</label><input type="number" id="f-rs" placeholder="85" min="0" max="99"></div>
 <div class="ff"><label>EMA 10>20</label><select id="f-em"><option value="yes">Yes</option><option value="no">No</option></select></div>
@@ -489,6 +490,42 @@ var SECTIONS=[
 
 var INDEX_SYMS=['SPY','QQQ','IWM','DIA','VIX','CL=F','DX-Y.NYB'];
 
+// ---- Multi-group membership ----
+// Each stock carries lists:[sectionId,...]. One record per ticker; the same
+// stage/RS/setup/notes show in every group. The legacy `list` field is kept
+// in sync (lists[0]) so older readers of the JSONBin keep working.
+var VALID_LISTS=SECTIONS.map(function(s){return s.id;});
+var LIST_MIGRATE={weekly:'focus',daily:'bullsnort',topdawg:'topdog',insider:'insiderbuy'};
+function stockLists(s){
+  var out=[];
+  var src=Array.isArray(s.lists)?s.lists:[];
+  if(!src.length&&s.list)src=[s.list];
+  src.forEach(function(l){var v=LIST_MIGRATE[l]||l;if(VALID_LISTS.indexOf(v)>=0&&out.indexOf(v)<0)out.push(v);});
+  if(!out.length)out.push('focus');
+  return out;
+}
+function syncListField(s){s.lists=stockLists(s);s.list=s.lists[0];return s;}
+function normalizeStocks(arr){
+  var byTicker={},out=[];
+  (arr||[]).forEach(function(s){
+    if(!s||!s.ticker)return;
+    s.ticker=String(s.ticker).trim().toUpperCase();
+    syncListField(s);
+    var k=byTicker[s.ticker];
+    if(!k){byTicker[s.ticker]=s;out.push(s);return;}
+    // Merge duplicate ticker: union groups, fill blanks from the duplicate.
+    s.lists.forEach(function(l){if(k.lists.indexOf(l)<0)k.lists.push(l);});
+    ['company','sector','notes','wf'].forEach(function(f){if(!k[f]&&s[f])k[f]=s[f];});
+    if(!k.rs&&s.rs)k.rs=s.rs;
+    if(k.addedDate&&s.addedDate&&s.addedDate<k.addedDate)k.addedDate=s.addedDate;
+    k.list=k.lists[0];
+  });
+  return out;
+}
+function findStockByTicker(t){t=String(t||'').trim().toUpperCase();return stocks.find(function(s){return s.ticker===t;});}
+function sectionById(id){return SECTIONS.find(function(x){return x.id===id;})||{title:id,dot:'var(--muted)'};}
+stocks=normalizeStocks(stocks);
+
 function showToast(m,t){var e=document.getElementById('toast');e.textContent=m;e.className='toast '+(t||'success')+' show';setTimeout(function(){e.classList.remove('show');},3000);}
 function setFS(){}
 function setLU(m,t){var e=document.getElementById('lu-st');e.textContent=m;e.style.color=t==='ok'?'var(--green)':t==='err'?'var(--red)':'var(--muted)';}
@@ -523,7 +560,7 @@ async function saveToBin(){
 }
 async function pullFromBin(){
   if(_saving){console.log('[APEX] Pull blocked — save in progress');return;}
-  try{var r=await fetch(JB_BASE+'/b/'+BIN_ID+'/latest',{headers:{'X-Master-Key':JB_KEY}});if(!r.ok)throw 0;var d=await r.json();if(d.record){if(d.record.stocks){stocks=d.record.stocks;localStorage.setItem('wl_local2',JSON.stringify(stocks));}if(d.record.breadth){breadth=Object.assign(breadth,d.record.breadth);localStorage.setItem('apex_breadth',JSON.stringify(breadth));}if(d.record.macro){macro=Object.assign(macro,d.record.macro);localStorage.setItem('apex_macro',JSON.stringify(macro));}if(d.record.fredKey&&!FRED_KEY){FRED_KEY=d.record.fredKey;localStorage.setItem('fred_key',FRED_KEY);}if(d.record.cotData){cotData=Object.assign(cotData,d.record.cotData);localStorage.setItem('apex_cot',JSON.stringify(cotData));}if(d.record.ivData){ivData=Object.assign(ivData,d.record.ivData);localStorage.setItem('apex_iv',JSON.stringify(ivData));}}}catch(e){console.error('pull',e);}
+  try{var r=await fetch(JB_BASE+'/b/'+BIN_ID+'/latest',{headers:{'X-Master-Key':JB_KEY}});if(!r.ok)throw 0;var d=await r.json();if(d.record){if(d.record.stocks){stocks=normalizeStocks(d.record.stocks);localStorage.setItem('wl_local2',JSON.stringify(stocks));}if(d.record.breadth){breadth=Object.assign(breadth,d.record.breadth);localStorage.setItem('apex_breadth',JSON.stringify(breadth));}if(d.record.macro){macro=Object.assign(macro,d.record.macro);localStorage.setItem('apex_macro',JSON.stringify(macro));}if(d.record.fredKey&&!FRED_KEY){FRED_KEY=d.record.fredKey;localStorage.setItem('fred_key',FRED_KEY);}if(d.record.cotData){cotData=Object.assign(cotData,d.record.cotData);localStorage.setItem('apex_cot',JSON.stringify(cotData));}if(d.record.ivData){ivData=Object.assign(ivData,d.record.ivData);localStorage.setItem('apex_iv',JSON.stringify(ivData));}}}catch(e){console.error('pull',e);}
 }
 function startSyncTimer(){if(syncTimer)clearInterval(syncTimer);syncTimer=setInterval(pullFromBin,5*60*1000);}
 
@@ -899,30 +936,42 @@ document.getElementById('breadth-interp').innerHTML='<div class="card" style="gr
 
 function renderMacro(){document.getElementById('macro-updated').textContent=macro.updated?'UPDATED: '+macro.updated:'';var items=[['t10y','10Y TREASURY','%'],['t2y','2Y TREASURY','%'],['curve','YIELD CURVE (10Y-2Y)','%'],['fedFunds','FED FUNDS RATE','%'],['unemp','UNEMPLOYMENT','%'],['claims','INITIAL CLAIMS','K'],['breakeven','10Y BREAKEVEN INFLATION','%'],['cpi','CPI (ALL URBAN)',''],['oil','CRUDE OIL',''],['dxy','US DOLLAR INDEX','']];var html='';items.forEach(function(item){var key=item[0],label=item[1],suffix=item[2];var d=macro[key]||{v:0,chg:0,trend:'—',dt:''};var tField=d.trend||'—';var chgStr=d.chg?(d.chg>0?'+':'')+d.chg:'0';html+='<div class="card"><div class="card-label">'+label+'</div><div class="card-value card-sm" style="color:var(--accent);font-family:var(--font-mono)">'+(d.v||'—')+'<span style="font-size:14px">'+suffix+'</span></div><div class="card-sub" style="color:'+trendColor(tField)+'"><span style="font-family:var(--font-mono)">'+chgStr+'</span> · <span style="color:'+trendColor(tField)+'">'+tField+'</span> · <span style="color:var(--muted);font-size:10px">'+(d.dt||'')+'</span></div></div>';});document.getElementById('macro-cards').innerHTML=html;}
 
-function renderWatchlist(){var q=(document.getElementById('srch')||{}).value||'';q=q.toLowerCase();var el=document.getElementById('sections');if(!el)return;var validLists=['focus','bullsnort','ondeck','topdog','rs','insiderbuy','insidersell','shorts'];var migrateMap={weekly:'focus',daily:'bullsnort',topdawg:'topdog',insider:'insiderbuy'};var html='';SECTIONS.forEach(function(sec){var data=stocks.filter(function(s){var effectiveList=migrateMap[s.list]||s.list;var inSection=effectiveList===sec.id||(sec.id==='focus'&&(!effectiveList||effectiveList==='all'||!validLists.includes(effectiveList)));if(!inSection)return false;if(!q)return true;return s.ticker.toLowerCase().includes(q)||(s.company||'').toLowerCase().includes(q)||(s.sector||'').toLowerCase().includes(q)||(s.notes||'').toLowerCase().includes(q);});
+function renderWatchlist(){var q=(document.getElementById('srch')||{}).value||'';q=q.toLowerCase();var el=document.getElementById('sections');if(!el)return;var html='';SECTIONS.forEach(function(sec){var data=stocks.filter(function(s){var inSection=stockLists(s).indexOf(sec.id)>=0;if(!inSection)return false;if(!q)return true;return s.ticker.toLowerCase().includes(q)||(s.company||'').toLowerCase().includes(q)||(s.sector||'').toLowerCase().includes(q)||(s.notes||'').toLowerCase().includes(q);});
 html+='<div class="section"><div class="section-hdr"><div class="section-dot" style="background:'+sec.dot+'"></div><span class="section-title" style="color:'+sec.dot+'">'+sec.title+'</span><span class="section-desc">— '+sec.desc+'</span><span class="section-count">'+data.length+'</span><div class="section-spacer"></div><div class="section-add"><input type="text" id="qa-tk-'+sec.id+'" placeholder="TICKER" oninput="this.value=this.value.toUpperCase()"><select id="qa-st-'+sec.id+'">';
 ['Stage 1','Stage 1A','Stage 1B','Stage 2','Stage 2A','Stage 2B','Stage 3','Stage 3A','Stage 3B','Stage 4','Stage 4A','Stage 4B'].forEach(function(st){html+='<option'+(st===sec.defStage?' selected':'')+'>'+st+'</option>';});
 html+='</select><input type="number" id="qa-rs-'+sec.id+'" placeholder="RS" min="0" max="99" style="width:44px;text-align:center"><select id="qa-wf-'+sec.id+'"><option value="">Setup...</option>';
 ['Base Breakout','Bull Flag','Consolidation','Stage 2 Entry','VCP','Basing','Pullback','Distribution','40-Week Hold'].forEach(function(wf){html+='<option'+(wf===sec.defSetup?' selected':'')+'>'+wf+'</option>';});
 html+='</select><button class="add-btn" onclick="quickAdd(\''+sec.id+'\')">+ Add</button></div></div>';
-if(!data.length){html+='<div class="section-table empty-table">No stocks — add one above</div>';}else{if(antsSortMode==='desc'){data=data.slice().sort(function(a,b){var sa=(antsCache[a.ticker]||{}).score;var sb=(antsCache[b.ticker]||{}).score;sa=(sa==null)?-1:sa;sb=(sb==null)?-1:sb;if(sb!==sa)return sb-sa;var fa=(antsCache[a.ticker]||{}).flag?1:0;var fb=(antsCache[b.ticker]||{}).flag?1:0;return fb-fa;});}var antsHdr='<th title="ANTS — 15-day institutional accumulation filter. Score 0-100; ant icon = strict O\'Neil flag. Click to '+(antsSortMode==='desc'?'clear sort':'sort by score desc')+'." style="cursor:pointer;user-select:none" onclick="toggleAntsSort()">ANTS'+(antsSortMode==='desc'?' ↓':'')+'</th>';html+='<div class="section-table"><table><thead><tr><th>Ticker</th><th>Price</th>'+(extHrsToggle?'<th>EXT</th>':'')+'<th>Day %</th><th>Week %</th><th>Month %</th><th>Stage</th><th>RS</th>'+antsHdr+'<th title="WANDA — backend composite score (0-100). Green ≥70, gold 50-69, gray &lt;50.">WANDA</th><th>Setup / Notes</th><th></th></tr></thead><tbody>';data.forEach(function(s){var price=gp(s.ticker),dv=dp(s.ticker),wv=wp(s.ticker),mv=mpp(s.ticker);var noteText=(s.wf?s.wf:'')+(s.wf&&s.notes?', ':'')+((s.notes||''));html+='<tr><td class="cell-ticker">'+s.ticker+'</td><td class="cell-price">'+(price>0?'$'+price.toFixed(2):'—')+'</td>'+(extHrsToggle?getExtCell(s.ticker):'')+'<td>'+pctCell(dv)+'</td><td>'+pctCell(wv)+'</td><td>'+pctCell(mv)+'</td><td><span class="stage-badge '+stageCls(s.stage)+'">'+stageLabel(s.stage)+'</span></td><td><span class="cell-rs" style="color:'+rsColor(s.rs)+'">'+(s.rs||0)+'</span></td><td>'+antsCell(s.ticker)+'</td><td>'+wandaCell(s.ticker)+'</td><td class="cell-notes" title="'+(noteText||'')+'">'+(noteText||'—')+'</td><td><div class="row-actions"><button class="row-btn" onclick="openEdit('+s.id+')">✎ Edit</button><button class="row-btn row-btn-del" onclick="delStk('+s.id+')">✕</button></div></td></tr>';});html+='</tbody></table></div>';}html+='</div>';});el.innerHTML=html;updateTickerScroll();}
+if(!data.length){html+='<div class="section-table empty-table">No stocks — add one above</div>';}else{if(antsSortMode==='desc'){data=data.slice().sort(function(a,b){var sa=(antsCache[a.ticker]||{}).score;var sb=(antsCache[b.ticker]||{}).score;sa=(sa==null)?-1:sa;sb=(sb==null)?-1:sb;if(sb!==sa)return sb-sa;var fa=(antsCache[a.ticker]||{}).flag?1:0;var fb=(antsCache[b.ticker]||{}).flag?1:0;return fb-fa;});}var antsHdr='<th title="ANTS — 15-day institutional accumulation filter. Score 0-100; ant icon = strict O\'Neil flag. Click to '+(antsSortMode==='desc'?'clear sort':'sort by score desc')+'." style="cursor:pointer;user-select:none" onclick="toggleAntsSort()">ANTS'+(antsSortMode==='desc'?' ↓':'')+'</th>';html+='<div class="section-table"><table><thead><tr><th>Ticker</th><th>Price</th>'+(extHrsToggle?'<th>EXT</th>':'')+'<th>Day %</th><th>Week %</th><th>Month %</th><th>Stage</th><th>RS</th>'+antsHdr+'<th title="WANDA — backend composite score (0-100). Green ≥70, gold 50-69, gray &lt;50.">WANDA</th><th>Setup / Notes</th><th></th></tr></thead><tbody>';data.forEach(function(s){var price=gp(s.ticker),dv=dp(s.ticker),wv=wp(s.ticker),mv=mpp(s.ticker);var noteText=(s.wf?s.wf:'')+(s.wf&&s.notes?', ':'')+((s.notes||''));var others=stockLists(s).filter(function(l){return l!==sec.id;});var dots=others.map(function(l){var o=sectionById(l);return'<span class="grp-dot" style="background:'+o.dot+'" title="Also in '+o.title+'"></span>';}).join('');html+='<tr><td class="cell-ticker">'+s.ticker+(dots?'<span class="grp-dots">'+dots+'</span>':'')+'</td><td class="cell-price">'+(price>0?'$'+price.toFixed(2):'—')+'</td>'+(extHrsToggle?getExtCell(s.ticker):'')+'<td>'+pctCell(dv)+'</td><td>'+pctCell(wv)+'</td><td>'+pctCell(mv)+'</td><td><span class="stage-badge '+stageCls(s.stage)+'">'+stageLabel(s.stage)+'</span></td><td><span class="cell-rs" style="color:'+rsColor(s.rs)+'">'+(s.rs||0)+'</span></td><td>'+antsCell(s.ticker)+'</td><td>'+wandaCell(s.ticker)+'</td><td class="cell-notes" title="'+(noteText||'')+'">'+(noteText||'—')+'</td><td><div class="row-actions"><button class="row-btn" onclick="openEdit('+s.id+')">✎ Edit</button><button class="row-btn row-btn-del" title="Remove from '+sec.title+'" onclick="delStk('+s.id+',\''+sec.id+'\')">✕</button></div></td></tr>';});html+='</tbody></table></div>';}html+='</div>';});el.innerHTML=html;updateTickerScroll();}
 
-window.quickAdd=async function(secId){var ticker=(document.getElementById('qa-tk-'+secId)||{}).value;if(!ticker||!ticker.trim()){showToast('Enter a ticker','err');return;}ticker=ticker.trim().toUpperCase();var stock={id:Date.now(),ticker:ticker,company:'',sector:'',list:secId,stage:(document.getElementById('qa-st-'+secId)||{}).value||'Stage 2',rs:parseInt((document.getElementById('qa-rs-'+secId)||{}).value)||0,ema:'yes',a50:'yes',alertA:0,alertB:0,notes:'',wf:(document.getElementById('qa-wf-'+secId)||{}).value||'',rsh:'no',addedDate:new Date().toISOString().split('T')[0]};try{var r=await fetch(NEXUS_API+'/api/prices/search?q='+encodeURIComponent(ticker));var d=await r.json();if(d&&d.name&&!isBadEquityResolution(d.name)){stock.company=d.name;if(d.sector)stock.sector=d.sector;}else if(d&&d.name){stock.company='⚠ unresolved ('+ticker+')';}}catch(e){}stocks.unshift(stock);renderWatchlist();var inp=document.getElementById('qa-tk-'+secId);if(inp)inp.value='';var rsInp=document.getElementById('qa-rs-'+secId);if(rsInp)rsInp.value='';antsForTicker(ticker).then(function(){if(curPage==='watchlist')renderWatchlist();});fetchAllWanda();try{await saveToBin();showToast(ticker+' added','success');}catch(e){showToast('⚠ Saved LOCAL only — cloud sync FAILED ('+(e.message||'check quota/key')+')','err');}};
+window.quickAdd=async function(secId){var ticker=(document.getElementById('qa-tk-'+secId)||{}).value;if(!ticker||!ticker.trim()){showToast('Enter a ticker','err');return;}ticker=ticker.trim().toUpperCase();var existing=findStockByTicker(ticker);if(existing){var secT=sectionById(secId).title;if(existing.lists.indexOf(secId)>=0){showToast(ticker+' is already in '+secT,'err');return;}existing.lists.push(secId);syncListField(existing);renderWatchlist();var inp0=document.getElementById('qa-tk-'+secId);if(inp0)inp0.value='';try{await saveToBin();showToast(ticker+' added to '+secT+' (shared record)','success');}catch(e){showToast('⚠ Saved LOCAL only — cloud sync FAILED ('+(e.message||'check quota/key')+')','err');}return;}var stock={id:Date.now(),ticker:ticker,company:'',sector:'',list:secId,lists:[secId],stage:(document.getElementById('qa-st-'+secId)||{}).value||'Stage 2',rs:parseInt((document.getElementById('qa-rs-'+secId)||{}).value)||0,ema:'yes',a50:'yes',alertA:0,alertB:0,notes:'',wf:(document.getElementById('qa-wf-'+secId)||{}).value||'',rsh:'no',addedDate:new Date().toISOString().split('T')[0]};try{var r=await fetch(NEXUS_API+'/api/prices/search?q='+encodeURIComponent(ticker));var d=await r.json();if(d&&d.name&&!isBadEquityResolution(d.name)){stock.company=d.name;if(d.sector)stock.sector=d.sector;}else if(d&&d.name){stock.company='⚠ unresolved ('+ticker+')';}}catch(e){}stocks.unshift(stock);renderWatchlist();var inp=document.getElementById('qa-tk-'+secId);if(inp)inp.value='';var rsInp=document.getElementById('qa-rs-'+secId);if(rsInp)rsInp.value='';antsForTicker(ticker).then(function(){if(curPage==='watchlist')renderWatchlist();});fetchAllWanda();try{await saveToBin();showToast(ticker+' added','success');}catch(e){showToast('⚠ Saved LOCAL only — cloud sync FAILED ('+(e.message||'check quota/key')+')','err');}};
 
-window.openEdit=function(id){editId=id;var s=stocks.find(function(x){return String(x.id)===String(id);});if(!s)return;document.getElementById('mo-title').textContent='Edit '+s.ticker;document.getElementById('f-tk').value=s.ticker;document.getElementById('f-co').value=s.company||'';document.getElementById('f-se').value=s.sector||'';var editList=({weekly:'focus',daily:'bullsnort'})[s.list]||s.list||'focus';document.getElementById('f-li').value=editList;document.getElementById('f-st').value=s.stage||'Stage 2';document.getElementById('f-rs').value=s.rs||'';document.getElementById('f-em').value=s.ema||'yes';document.getElementById('f-50').value=s.a50||'yes';document.getElementById('f-aa').value=s.alertA||'';document.getElementById('f-ab').value=s.alertB||'';document.getElementById('f-nt').value=s.notes||'';document.getElementById('f-wf').value=s.wf||'';document.getElementById('f-rsh').value=s.rsh||'no';setLU('','');document.getElementById('stock-mo').classList.add('open');};
+window.openEdit=function(id){editId=id;var s=stocks.find(function(x){return String(x.id)===String(id);});if(!s)return;document.getElementById('mo-title').textContent='Edit '+s.ticker;document.getElementById('f-tk').value=s.ticker;document.getElementById('f-co').value=s.company||'';document.getElementById('f-se').value=s.sector||'';renderGroupChecks(stockLists(s));document.getElementById('f-st').value=s.stage||'Stage 2';document.getElementById('f-rs').value=s.rs||'';document.getElementById('f-em').value=s.ema||'yes';document.getElementById('f-50').value=s.a50||'yes';document.getElementById('f-aa').value=s.alertA||'';document.getElementById('f-ab').value=s.alertB||'';document.getElementById('f-nt').value=s.notes||'';document.getElementById('f-wf').value=s.wf||'';document.getElementById('f-rsh').value=s.rsh||'no';setLU('','');document.getElementById('stock-mo').classList.add('open');};
+function renderGroupChecks(checked){var el=document.getElementById('f-li');if(!el)return;el.innerHTML=SECTIONS.map(function(sec){var on=checked.indexOf(sec.id)>=0;return'<label><input type="checkbox" value="'+sec.id+'"'+(on?' checked':'')+'><span class="grp-dot" style="background:'+sec.dot+'"></span>'+sec.title+'</label>';}).join('');}
+function readGroupChecks(){var el=document.getElementById('f-li');var out=[];if(el)el.querySelectorAll('input[type=checkbox]:checked').forEach(function(c){out.push(c.value);});return out.length?out:['focus'];}
 window.closeSMo=function(){document.getElementById('stock-mo').classList.remove('open');editId=null;};
-window.saveStk=async function(){var ticker=document.getElementById('f-tk').value.trim().toUpperCase();if(!ticker){showToast('Enter a ticker','err');return;}var wasEdit=!!editId;var stock={id:editId||Date.now(),ticker:ticker,company:document.getElementById('f-co').value.trim(),sector:document.getElementById('f-se').value,list:document.getElementById('f-li').value||'focus',stage:document.getElementById('f-st').value,rs:parseInt(document.getElementById('f-rs').value)||0,ema:document.getElementById('f-em').value,a50:document.getElementById('f-50').value,alertA:parseFloat(document.getElementById('f-aa').value)||0,alertB:parseFloat(document.getElementById('f-ab').value)||0,notes:document.getElementById('f-nt').value.trim(),wf:document.getElementById('f-wf').value,rsh:document.getElementById('f-rsh').value,addedDate:editId?(stocks.find(function(s){return String(s.id)===String(editId);})||{}).addedDate:new Date().toISOString().split('T')[0]};if(editId){var i=stocks.findIndex(function(s){return String(s.id)===String(editId);});if(i>=0)stocks[i]=stock;}else stocks.unshift(stock);window.closeSMo();renderWatchlist();try{await saveToBin();showToast(wasEdit?ticker+' updated':ticker+' added','success');}catch(e){showToast('⚠ Saved LOCAL only — cloud sync FAILED ('+(e.message||'check quota/key')+')','err');}};
-window.delStk=async function(id){
+window.saveStk=async function(){var ticker=document.getElementById('f-tk').value.trim().toUpperCase();if(!ticker){showToast('Enter a ticker','err');return;}var wasEdit=!!editId;var stock={id:editId||Date.now(),ticker:ticker,company:document.getElementById('f-co').value.trim(),sector:document.getElementById('f-se').value,list:'focus',lists:readGroupChecks(),stage:document.getElementById('f-st').value,rs:parseInt(document.getElementById('f-rs').value)||0,ema:document.getElementById('f-em').value,a50:document.getElementById('f-50').value,alertA:parseFloat(document.getElementById('f-aa').value)||0,alertB:parseFloat(document.getElementById('f-ab').value)||0,notes:document.getElementById('f-nt').value.trim(),wf:document.getElementById('f-wf').value,rsh:document.getElementById('f-rsh').value,addedDate:editId?(stocks.find(function(s){return String(s.id)===String(editId);})||{}).addedDate:new Date().toISOString().split('T')[0]};syncListField(stock);var dup=findStockByTicker(ticker);if(dup&&String(dup.id)!==String(stock.id)){stock.lists.forEach(function(l){if(dup.lists.indexOf(l)<0)dup.lists.push(l);});['company','sector','notes','wf'].forEach(function(f){if(stock[f])dup[f]=stock[f];});dup.stage=stock.stage;dup.rs=stock.rs;dup.ema=stock.ema;dup.a50=stock.a50;dup.alertA=stock.alertA;dup.alertB=stock.alertB;dup.rsh=stock.rsh;syncListField(dup);if(editId)stocks=stocks.filter(function(s){return String(s.id)!==String(editId);});showToast(ticker+' merged into existing record','success');}else if(editId){var i=stocks.findIndex(function(s){return String(s.id)===String(editId);});if(i>=0)stocks[i]=stock;}else stocks.unshift(stock);window.closeSMo();renderWatchlist();try{await saveToBin();showToast(wasEdit?ticker+' updated':ticker+' added','success');}catch(e){showToast('⚠ Saved LOCAL only — cloud sync FAILED ('+(e.message||'check quota/key')+')','err');}};
+window.delStk=async function(id,secId){
   var s=stocks.find(function(x){return String(x.id)===String(id);});
   if(!s)return;
   var idx=stocks.indexOf(s);
-  // Remove immediately — no confirm dialog
-  stocks=stocks.filter(function(x){return String(x.id)!==String(id);});
+  var before=stockLists(s).slice();
+  var removedAll=false,label='';
+  if(secId&&before.length>1){
+    // Remove from this group only; the record stays in its other groups.
+    s.lists=before.filter(function(l){return l!==secId;});syncListField(s);
+    label=s.ticker+' removed from '+sectionById(secId).title;
+  }else{
+    // Last group (or no group given): remove the whole record. No confirm dialog.
+    removedAll=true;
+    stocks=stocks.filter(function(x){return String(x.id)!==String(id);});
+    label=s.ticker+' removed';
+  }
   renderWatchlist();
   // Show undo toast
   if(_undoTimer)clearTimeout(_undoTimer);
-  _undoStock={stock:s,index:idx};
-  showToast(s.ticker+' removed · <span onclick="undoDelete()" style="text-decoration:underline;cursor:pointer;color:var(--accent)">UNDO</span>','err');
+  _undoStock={stock:s,index:idx,lists:before,removedAll:removedAll};
+  showToast(label+' · <span onclick="undoDelete()" style="text-decoration:underline;cursor:pointer;color:var(--accent)">UNDO</span>','err');
   _undoTimer=setTimeout(async function(){
     _undoStock=null;
     try{await saveToBin();}catch(e){console.warn('Delete sync failed');}
@@ -932,7 +981,8 @@ window.undoDelete=function(){
   if(!_undoStock)return;
   clearTimeout(_undoTimer);
   var s=_undoStock.stock,idx=_undoStock.index;
-  stocks.splice(Math.min(idx,stocks.length),0,s);
+  s.lists=_undoStock.lists.slice();syncListField(s);
+  if(_undoStock.removedAll)stocks.splice(Math.min(idx,stocks.length),0,s);
   _undoStock=null;
   renderWatchlist();
   showToast(s.ticker+' restored','success');
@@ -949,6 +999,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'){window.clos
 document.getElementById('stock-mo').addEventListener('click',function(e){if(e.target===document.getElementById('stock-mo'))window.closeSMo();});
 document.getElementById('set-mo').addEventListener('click',function(e){if(e.target===document.getElementById('set-mo'))window.closeSet();});
 
+window.renderWatchlist=renderWatchlist; // search box oninput needs a global
 launchApp();
 })();
 </script>
