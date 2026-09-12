@@ -485,8 +485,8 @@ var SECTIONS=[
 {id:'topdog',dot:'var(--purple)',title:'TOP DOG',desc:'sector leaders · strongest names in the market',defStage:'Stage 2',defSetup:'Stage 2 Entry'},
 {id:'rs',dot:'var(--teal)',title:'RELATIVE STRENGTH',desc:'leaders showing RS new highs & outperforming',defStage:'Stage 2',defSetup:''},
 {id:'insiderbuy',dot:'var(--cyan)',title:'WEEKLY FOCUS LIST',desc:'weekly chart focus · primary names this week',defStage:'Stage 2',defSetup:''},
-{id:'insidersell',dot:'var(--pink)',title:'WEEKLY FOCUS PIVOT LIST',desc:'weekly pivots · breakout / breakdown watch',defStage:'Stage 3',defSetup:'Distribution'},
-{id:'shorts',dot:'var(--red)',title:'SHORTS',desc:'stage 4 declines · short candidates',defStage:'Stage 4',defSetup:'Distribution'}];
+{id:'ep',dot:'var(--pink)',title:'EPISODIC PIVOTS',desc:'earnings / news gaps · high volume · new trend starts',defStage:'Stage 2',defSetup:'Base Breakout'},
+{id:'doublers',dot:'var(--warn)',title:'DOUBLERS',desc:'names with 100%+ potential · strong RS · power trends',defStage:'Stage 2',defSetup:'Stage 2 Entry'}];
 
 var INDEX_SYMS=['SPY','QQQ','IWM','DIA','VIX','CL=F','DX-Y.NYB'];
 
@@ -495,7 +495,7 @@ var INDEX_SYMS=['SPY','QQQ','IWM','DIA','VIX','CL=F','DX-Y.NYB'];
 // stage/RS/setup/notes show in every group. The legacy `list` field is kept
 // in sync (lists[0]) so older readers of the JSONBin keep working.
 var VALID_LISTS=SECTIONS.map(function(s){return s.id;});
-var LIST_MIGRATE={weekly:'focus',daily:'bullsnort',topdawg:'topdog',insider:'insiderbuy'};
+var LIST_MIGRATE={weekly:'focus',daily:'bullsnort',topdawg:'topdog',insider:'insiderbuy',insidersell:'ep',shorts:'doublers'};
 function stockLists(s){
   var out=[];
   var src=Array.isArray(s.lists)?s.lists:[];
