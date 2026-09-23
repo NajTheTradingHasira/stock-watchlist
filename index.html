@@ -111,6 +111,16 @@ tbody tr:last-child td{border-bottom:none;}tbody tr:hover td{background:rgba(255
 .wanda-s-lo{background:rgba(100,116,139,.1);color:var(--muted);border:1px solid rgba(100,116,139,.2);}
 .cell-wanda-pending{color:var(--dim);font-family:var(--font-mono);font-size:11px;}
 .cell-wanda-na{color:var(--dim);font-family:var(--font-mono);font-size:12px;}
+.cell-h52{display:inline-flex;flex-direction:column;line-height:1.25;font-family:var(--font-mono);cursor:help;}
+.h52-px{font-weight:700;font-size:12px;color:var(--text);}
+.h52-off{font-weight:700;font-size:10px;letter-spacing:.3px;}
+.h52-at{color:var(--green);}.h52-near{color:var(--green);opacity:.85;}.h52-mid{color:var(--gold);}.h52-far{color:var(--muted);}.h52-deep{color:var(--red);}
+.h52-new{padding:1px 5px;border-radius:3px;font-size:9px;font-weight:800;letter-spacing:.6px;background:rgba(34,197,94,.15);color:var(--green);border:1px solid rgba(34,197,94,.3);align-self:flex-start;}
+.cell-h52-na{color:var(--dim);font-family:var(--font-mono);font-size:12px;}
+.h52s-ctl{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:11px;color:var(--muted);}
+.h52s-ctl select{background:var(--s2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:5px 8px;font-family:var(--font-mono);font-size:11px;}
+.h52s-ctl label{display:flex;align-items:center;gap:5px;cursor:pointer;}.h52s-ctl input{accent-color:var(--accent);}
+.h52s-tag{font-family:var(--font-mono);font-size:10px;color:var(--dim);border:1px solid var(--border);border-radius:3px;padding:1px 5px;margin-left:6px;}
 .row-actions{display:flex;gap:4px;}.row-btn{background:none;border:1px solid var(--border);border-radius:3px;color:var(--dim);padding:3px 8px;cursor:pointer;font-size:11px;font-family:var(--font-mono);}
 .row-btn:hover{border-color:var(--accent);color:var(--accent);}.row-btn-del:hover{border-color:var(--red);color:var(--red);}
 .search-bar{display:flex;align-items:center;gap:10px;margin-bottom:20px;}
@@ -478,6 +488,150 @@ async function fetchAllWanda(opts){
 }
 // ── END WANDA ────────────────────────────────────────────────────────────
 
+// ── 52-WEEK HIGH ─────────────────────────────────────────────────────────
+// Source order: (1) /api/prices field, if the backend sends one;
+// (2) Polygon daily aggs (needs polygon_key), cached 24h in localStorage.
+// Displayed high = max(cached high, live price), so a new high shows at once
+// and a stale cache can never show price above the 52W high.
+var H52_TTL_MS=24*60*60*1000;
+var H52_POLY_GAP_MS=13000;   // Polygon free tier = 5 req/min
+var H52_FIELDS=['high52','fiftyTwoWeekHigh','52w_high','week52High','yearHigh','high_52w'];
+var h52Cache=(function(){try{return JSON.parse(localStorage.getItem('apex_h52')||'{}')||{};}catch(e){return{};}})();
+var h52Running=false;
+function h52Save(){try{localStorage.setItem('apex_h52',JSON.stringify(h52Cache));}catch(e){}}
+function h52FromBackend(sym,d){
+  for(var i=0;i<H52_FIELDS.length;i++){
+    var v=parseFloat(d[H52_FIELDS[i]]);
+    if(isFinite(v)&&v>0){h52Cache[sym]={high:v,ts:Date.now(),src:'nexus'};h52Save();return;}
+  }
+}
+function h52Fresh(t){var c=h52Cache[t];return !!(c&&c.high>0&&(Date.now()-c.ts)<H52_TTL_MS);}
+function h52Value(t){
+  var c=h52Cache[t];if(!c||!(c.high>0))return null;
+  var px=gp(t);return px>0?Math.max(c.high,px):c.high;
+}
+function h52Cell(t){
+  var c=h52Cache[t];
+  if(!c||!(c.high>0)){
+    var why=POLYGON_KEY?'Loading 52W high…':'No 52W data — backend field missing and no Polygon key';
+    return'<span class="cell-h52-na" title="'+why+'">'+(POLYGON_KEY?'…':'—')+'</span>';
+  }
+  var px=gp(t),hi=h52Value(t);
+  var off=px>0?(px/hi-1)*100:null;       // 0 at the high, negative below it
+  var isNew=px>0&&px>=c.high;
+  var cls=off==null?'h52-far':isNew?'h52-at':off>=-5?'h52-near':off>=-15?'h52-mid':off>=-25?'h52-far':'h52-deep';
+  var tip='52-WEEK HIGH: $'+hi.toFixed(2)+
+    (off!=null?'\nDistance: '+off.toFixed(1)+'%':'')+
+    '\nCANSLIM N: within 15% of high = '+(off!=null&&off>=-15?'PASS':'FAIL')+
+    '\nSource: '+(c.src==='nexus'?'nexus-backend':'Polygon daily bars')+' · '+new Date(c.ts).toLocaleDateString();
+  var line2=isNew?'<span class="h52-new">NEW HI</span>':
+    '<span class="h52-off '+cls+'">'+(off==null?'—':off.toFixed(1)+'%')+'</span>';
+  return'<span class="cell-h52" title="'+tip.replace(/"/g,'&quot;')+'"><span class="h52-px">$'+hi.toFixed(2)+'</span>'+line2+'</span>';
+}
+// Update cells in place so the quick-add inputs are not reset mid-typing.
+function h52Paint(t){
+  document.querySelectorAll('td[data-h52="'+t+'"]').forEach(function(td){td.innerHTML=h52Cell(t);});
+}
+async function h52FetchPolygon(t){
+  var to=new Date(),from=new Date(to.getTime()-366*864e5);
+  var f=function(d){return d.toISOString().slice(0,10);};
+  var url='https://api.polygon.io/v2/aggs/ticker/'+encodeURIComponent(t)+'/range/1/day/'+f(from)+'/'+f(to)+
+    '?adjusted=true&sort=asc&limit=400&apiKey='+POLYGON_KEY;
+  var r=await fetch(url);
+  if(r.status===429)throw new Error('rate');
+  if(!r.ok)return null;
+  var j=await r.json(),bars=j.results||[];
+  if(!bars.length)return null;
+  var hi=0;bars.forEach(function(b){if(b.h>hi)hi=b.h;});
+  return hi>0?hi:null;
+}
+async function fetchAllH52(){
+  if(h52Running||!POLYGON_KEY)return;
+  var queue=[...new Set(stocks.map(function(s){return s.ticker;}))].filter(function(t){return !h52Fresh(t);});
+  if(!queue.length)return;
+  h52Running=true;
+  try{
+    for(var i=0;i<queue.length;i++){
+      var t=queue[i];
+      if(h52Fresh(t))continue;               // backend may have filled it meanwhile
+      try{
+        var hi=await h52FetchPolygon(t);
+        if(hi){h52Cache[t]={high:hi,ts:Date.now(),src:'polygon'};h52Save();}
+      }catch(e){
+        if(e.message==='rate'){await new Promise(function(r){setTimeout(r,60000);});i--;continue;}
+        console.warn('[APEX] 52W high fetch failed for '+t+':',e.message);
+      }
+      h52Paint(t);paintH52Screen();
+      if(i<queue.length-1)await new Promise(function(r){setTimeout(r,H52_POLY_GAP_MS);});
+    }
+  }finally{h52Running=false;}
+}
+// ── END 52-WEEK HIGH ─────────────────────────────────────────────────────
+
+// ── 52W HIGH SCREENER (derived section; universe = every watchlist ticker) ─
+var H52S_COLOR='var(--cyan)';
+var h52sMax=parseFloat(localStorage.getItem('apex_h52s_max')||'15');   // max % below high
+var h52sStage2=localStorage.getItem('apex_h52s_s2')==='true';
+window.setH52sMax=function(v){h52sMax=parseFloat(v);localStorage.setItem('apex_h52s_max',String(h52sMax));paintH52Screen();};
+window.setH52sStage2=function(on){h52sStage2=!!on;localStorage.setItem('apex_h52s_s2',String(h52sStage2));paintH52Screen();};
+function h52Off(t){var hi=h52Value(t),px=gp(t);return(hi&&px>0)?(px/hi-1)*100:null;}
+function h52ScreenRows(q){
+  var seen={},rows=[],pending=0;
+  stocks.forEach(function(s){
+    if(seen[s.ticker])return;seen[s.ticker]=1;
+    if(q&&!(s.ticker.toLowerCase().includes(q)||(s.company||'').toLowerCase().includes(q)||(s.sector||'').toLowerCase().includes(q)||(s.notes||'').toLowerCase().includes(q)))return;
+    if(h52sStage2&&!/^Stage 2/.test(s.stage||''))return;
+    var off=h52Off(s.ticker);
+    if(off==null){pending++;return;}
+    if(off>=-h52sMax)rows.push({s:s,off:off});
+  });
+  rows.sort(function(a,b){return b.off-a.off;});   // closest to high first
+  return{rows:rows,pending:pending,universe:Object.keys(seen).length};
+}
+function h52ScreenHtml(q){
+  var r=h52ScreenRows(q);
+  var opts=[[0,'New highs only'],[5,'≤ 5% off high'],[10,'≤ 10% off high'],[15,'≤ 15% (CANSLIM N)'],[25,'≤ 25% off high']];
+  var html='<div class="section"><div class="section-hdr"><div class="section-dot" style="background:'+H52S_COLOR+'"></div>'+
+    '<span class="section-title" style="color:'+H52S_COLOR+'">52W High Screen</span>'+
+    '<span class="section-desc">— auto-screened from all lists · closest to high first'+(r.pending?' · '+r.pending+' pending data':'')+'</span>'+
+    '<span class="section-count">'+r.rows.length+'</span><div class="section-spacer"></div>'+
+    '<div class="h52s-ctl"><label><input type="checkbox"'+(h52sStage2?' checked':'')+' onchange="setH52sStage2(this.checked)">Stage 2 only</label>'+
+    '<select onchange="setH52sMax(this.value)">'+opts.map(function(o){return'<option value="'+o[0]+'"'+(o[0]===h52sMax?' selected':'')+'>'+o[1]+'</option>';}).join('')+'</select></div></div>';
+  if(!r.rows.length){
+    var msg=r.universe?'No names inside the filter'+(r.pending?' yet — 52W data still loading':''):'No stocks in the watchlist';
+    return html+'<div class="section-table empty-table">'+msg+'</div></div>';
+  }
+  html+='<div class="section-table"><table><thead><tr><th>Ticker</th><th>Price</th>'+(extHrsToggle?'<th>EXT</th>':'')+
+    '<th>Day %</th><th>Week %</th><th>Month %</th><th>52W High</th><th>Stage</th><th>RS</th><th>ANTS</th><th>WANDA</th><th>Lists / Notes</th></tr></thead><tbody>';
+  r.rows.forEach(function(x){
+    var s=x.s,t=s.ticker,price=gp(t);
+    var dots=stockLists(s).map(function(l){var o=sectionById(l);return'<span class="grp-dot" style="background:'+o.dot+'" title="In '+o.title+'"></span>';}).join('');
+    var lists=stockLists(s).map(function(l){return sectionById(l).title;}).join(', ');
+    var noteText=(s.wf?s.wf:'')+(s.wf&&s.notes?', ':'')+(s.notes||'');
+    html+='<tr><td class="cell-ticker">'+t+(dots?'<span class="grp-dots">'+dots+'</span>':'')+'</td>'+
+      '<td class="cell-price">'+(price>0?'$'+price.toFixed(2):'—')+'</td>'+(extHrsToggle?getExtCell(t):'')+
+      '<td>'+pctCell(dp(t))+'</td><td>'+pctCell(wp(t))+'</td><td>'+pctCell(mpp(t))+'</td>'+
+      '<td data-h52="'+t+'">'+h52Cell(t)+'</td>'+
+      '<td><span class="stage-badge '+stageCls(s.stage)+'">'+stageLabel(s.stage)+'</span></td>'+
+      '<td><span class="cell-rs" style="color:'+rsColor(s.rs)+'">'+(s.rs||0)+'</span></td>'+
+      '<td>'+antsCell(t)+'</td><td>'+wandaCell(t)+'</td>'+
+      '<td class="cell-notes" title="'+(lists+(noteText?' · '+noteText:'')).replace(/"/g,'&quot;')+'">'+(noteText||'—')+'<span class="h52s-tag">'+stockLists(s).length+' list'+(stockLists(s).length>1?'s':'')+'</span></td></tr>';
+  });
+  return html+'</tbody></table></div></div>';
+}
+// Repaint only the screener block; throttled so Polygon backfill does not thrash the DOM.
+var h52sTimer=null;
+function paintH52Screen(){
+  if(h52sTimer)return;
+  h52sTimer=setTimeout(function(){
+    h52sTimer=null;
+    var el=document.getElementById('h52-screen');if(!el)return;
+    var q=((document.getElementById('srch')||{}).value||'').toLowerCase();
+    el.innerHTML=h52ScreenHtml(q);
+  },400);
+}
+// ── END 52W HIGH SCREENER ────────────────────────────────────────────────
+
 var SECTIONS=[
 {id:'focus',dot:'var(--gold)',title:'FOCUS LIST',desc:'high-conviction names · core positions',defStage:'Stage 2',defSetup:'Consolidation'},
 {id:'bullsnort',dot:'var(--green)',title:'BULLSNORT',desc:'daily chart triggers · flags, breakouts, momentum',defStage:'Stage 2',defSetup:'Bull Flag'},
@@ -588,6 +742,7 @@ async function fetchAll(){
         // Map ^VIX back to VIX
         var key=sym==='^VIX'?'VIX':sym;
         prices[key]={price:d.price,dayPct:d.dayPct,weekPct:d.weekPct,monthPct:d.monthPct,volume:d.volume};
+        h52FromBackend(key,d);
       });
     }catch(e){console.warn('[APEX] Price fetch failed:',e.message);}
   }
@@ -614,6 +769,7 @@ async function fetchAll(){
   // Kick off ANTS refresh in the background — does not block other data
   fetchAllANTS();
   fetchAllWanda();
+  fetchAllH52();
 }
 function startRefTimer(){if(refTimer)clearInterval(refTimer);var bar=document.getElementById('rprog');countdown=refInt;refTimer=setInterval(function(){countdown--;if(bar)bar.style.width=(countdown/refInt*100)+'%';if(countdown<=0){countdown=refInt;if(autoRef)fetchAll();}},1000);}
 window.manualRef=function(){fetchAll();countdown=refInt;};
@@ -936,13 +1092,13 @@ document.getElementById('breadth-interp').innerHTML='<div class="card" style="gr
 
 function renderMacro(){document.getElementById('macro-updated').textContent=macro.updated?'UPDATED: '+macro.updated:'';var items=[['t10y','10Y TREASURY','%'],['t2y','2Y TREASURY','%'],['curve','YIELD CURVE (10Y-2Y)','%'],['fedFunds','FED FUNDS RATE','%'],['unemp','UNEMPLOYMENT','%'],['claims','INITIAL CLAIMS','K'],['breakeven','10Y BREAKEVEN INFLATION','%'],['cpi','CPI (ALL URBAN)',''],['oil','CRUDE OIL',''],['dxy','US DOLLAR INDEX','']];var html='';items.forEach(function(item){var key=item[0],label=item[1],suffix=item[2];var d=macro[key]||{v:0,chg:0,trend:'—',dt:''};var tField=d.trend||'—';var chgStr=d.chg?(d.chg>0?'+':'')+d.chg:'0';html+='<div class="card"><div class="card-label">'+label+'</div><div class="card-value card-sm" style="color:var(--accent);font-family:var(--font-mono)">'+(d.v||'—')+'<span style="font-size:14px">'+suffix+'</span></div><div class="card-sub" style="color:'+trendColor(tField)+'"><span style="font-family:var(--font-mono)">'+chgStr+'</span> · <span style="color:'+trendColor(tField)+'">'+tField+'</span> · <span style="color:var(--muted);font-size:10px">'+(d.dt||'')+'</span></div></div>';});document.getElementById('macro-cards').innerHTML=html;}
 
-function renderWatchlist(){var q=(document.getElementById('srch')||{}).value||'';q=q.toLowerCase();var el=document.getElementById('sections');if(!el)return;var html='';SECTIONS.forEach(function(sec){var data=stocks.filter(function(s){var inSection=stockLists(s).indexOf(sec.id)>=0;if(!inSection)return false;if(!q)return true;return s.ticker.toLowerCase().includes(q)||(s.company||'').toLowerCase().includes(q)||(s.sector||'').toLowerCase().includes(q)||(s.notes||'').toLowerCase().includes(q);});
+function renderWatchlist(){var q=(document.getElementById('srch')||{}).value||'';q=q.toLowerCase();var el=document.getElementById('sections');if(!el)return;var html='<div id="h52-screen">'+h52ScreenHtml(q)+'</div>';SECTIONS.forEach(function(sec){var data=stocks.filter(function(s){var inSection=stockLists(s).indexOf(sec.id)>=0;if(!inSection)return false;if(!q)return true;return s.ticker.toLowerCase().includes(q)||(s.company||'').toLowerCase().includes(q)||(s.sector||'').toLowerCase().includes(q)||(s.notes||'').toLowerCase().includes(q);});
 html+='<div class="section"><div class="section-hdr"><div class="section-dot" style="background:'+sec.dot+'"></div><span class="section-title" style="color:'+sec.dot+'">'+sec.title+'</span><span class="section-desc">— '+sec.desc+'</span><span class="section-count">'+data.length+'</span><div class="section-spacer"></div><div class="section-add"><input type="text" id="qa-tk-'+sec.id+'" placeholder="TICKER" oninput="this.value=this.value.toUpperCase()"><select id="qa-st-'+sec.id+'">';
 ['Stage 1','Stage 1A','Stage 1B','Stage 2','Stage 2A','Stage 2B','Stage 3','Stage 3A','Stage 3B','Stage 4','Stage 4A','Stage 4B'].forEach(function(st){html+='<option'+(st===sec.defStage?' selected':'')+'>'+st+'</option>';});
 html+='</select><input type="number" id="qa-rs-'+sec.id+'" placeholder="RS" min="0" max="99" style="width:44px;text-align:center"><select id="qa-wf-'+sec.id+'"><option value="">Setup...</option>';
 ['Base Breakout','Bull Flag','Consolidation','Stage 2 Entry','VCP','Basing','Pullback','Distribution','40-Week Hold'].forEach(function(wf){html+='<option'+(wf===sec.defSetup?' selected':'')+'>'+wf+'</option>';});
 html+='</select><button class="add-btn" onclick="quickAdd(\''+sec.id+'\')">+ Add</button></div></div>';
-if(!data.length){html+='<div class="section-table empty-table">No stocks — add one above</div>';}else{if(antsSortMode==='desc'){data=data.slice().sort(function(a,b){var sa=(antsCache[a.ticker]||{}).score;var sb=(antsCache[b.ticker]||{}).score;sa=(sa==null)?-1:sa;sb=(sb==null)?-1:sb;if(sb!==sa)return sb-sa;var fa=(antsCache[a.ticker]||{}).flag?1:0;var fb=(antsCache[b.ticker]||{}).flag?1:0;return fb-fa;});}var antsHdr='<th title="ANTS — 15-day institutional accumulation filter. Score 0-100; ant icon = strict O\'Neil flag. Click to '+(antsSortMode==='desc'?'clear sort':'sort by score desc')+'." style="cursor:pointer;user-select:none" onclick="toggleAntsSort()">ANTS'+(antsSortMode==='desc'?' ↓':'')+'</th>';html+='<div class="section-table"><table><thead><tr><th>Ticker</th><th>Price</th>'+(extHrsToggle?'<th>EXT</th>':'')+'<th>Day %</th><th>Week %</th><th>Month %</th><th>Stage</th><th>RS</th>'+antsHdr+'<th title="WANDA — backend composite score (0-100). Green ≥70, gold 50-69, gray &lt;50.">WANDA</th><th>Setup / Notes</th><th></th></tr></thead><tbody>';data.forEach(function(s){var price=gp(s.ticker),dv=dp(s.ticker),wv=wp(s.ticker),mv=mpp(s.ticker);var noteText=(s.wf?s.wf:'')+(s.wf&&s.notes?', ':'')+((s.notes||''));var others=stockLists(s).filter(function(l){return l!==sec.id;});var dots=others.map(function(l){var o=sectionById(l);return'<span class="grp-dot" style="background:'+o.dot+'" title="Also in '+o.title+'"></span>';}).join('');html+='<tr><td class="cell-ticker">'+s.ticker+(dots?'<span class="grp-dots">'+dots+'</span>':'')+'</td><td class="cell-price">'+(price>0?'$'+price.toFixed(2):'—')+'</td>'+(extHrsToggle?getExtCell(s.ticker):'')+'<td>'+pctCell(dv)+'</td><td>'+pctCell(wv)+'</td><td>'+pctCell(mv)+'</td><td><span class="stage-badge '+stageCls(s.stage)+'">'+stageLabel(s.stage)+'</span></td><td><span class="cell-rs" style="color:'+rsColor(s.rs)+'">'+(s.rs||0)+'</span></td><td>'+antsCell(s.ticker)+'</td><td>'+wandaCell(s.ticker)+'</td><td class="cell-notes" title="'+(noteText||'')+'">'+(noteText||'—')+'</td><td><div class="row-actions"><button class="row-btn" onclick="openEdit('+s.id+')">✎ Edit</button><button class="row-btn row-btn-del" title="Remove from '+sec.title+'" onclick="delStk('+s.id+',\''+sec.id+'\')">✕</button></div></td></tr>';});html+='</tbody></table></div>';}html+='</div>';});el.innerHTML=html;updateTickerScroll();}
+if(!data.length){html+='<div class="section-table empty-table">No stocks — add one above</div>';}else{if(antsSortMode==='desc'){data=data.slice().sort(function(a,b){var sa=(antsCache[a.ticker]||{}).score;var sb=(antsCache[b.ticker]||{}).score;sa=(sa==null)?-1:sa;sb=(sb==null)?-1:sb;if(sb!==sa)return sb-sa;var fa=(antsCache[a.ticker]||{}).flag?1:0;var fb=(antsCache[b.ticker]||{}).flag?1:0;return fb-fa;});}var antsHdr='<th title="ANTS — 15-day institutional accumulation filter. Score 0-100; ant icon = strict O\'Neil flag. Click to '+(antsSortMode==='desc'?'clear sort':'sort by score desc')+'." style="cursor:pointer;user-select:none" onclick="toggleAntsSort()">ANTS'+(antsSortMode==='desc'?' ↓':'')+'</th>';html+='<div class="section-table"><table><thead><tr><th>Ticker</th><th>Price</th>'+(extHrsToggle?'<th>EXT</th>':'')+'<th>Day %</th><th>Week %</th><th>Month %</th><th title="52-week high (intraday). Line 2 = % below high. Green ≤5%, gold ≤15% (CANSLIM N pass), gray ≤25%, red &gt;25%. NEW HI = price at/above prior high.">52W High</th><th>Stage</th><th>RS</th>'+antsHdr+'<th title="WANDA — backend composite score (0-100). Green ≥70, gold 50-69, gray &lt;50.">WANDA</th><th>Setup / Notes</th><th></th></tr></thead><tbody>';data.forEach(function(s){var price=gp(s.ticker),dv=dp(s.ticker),wv=wp(s.ticker),mv=mpp(s.ticker);var noteText=(s.wf?s.wf:'')+(s.wf&&s.notes?', ':'')+((s.notes||''));var others=stockLists(s).filter(function(l){return l!==sec.id;});var dots=others.map(function(l){var o=sectionById(l);return'<span class="grp-dot" style="background:'+o.dot+'" title="Also in '+o.title+'"></span>';}).join('');html+='<tr><td class="cell-ticker">'+s.ticker+(dots?'<span class="grp-dots">'+dots+'</span>':'')+'</td><td class="cell-price">'+(price>0?'$'+price.toFixed(2):'—')+'</td>'+(extHrsToggle?getExtCell(s.ticker):'')+'<td>'+pctCell(dv)+'</td><td>'+pctCell(wv)+'</td><td>'+pctCell(mv)+'</td><td data-h52="'+s.ticker+'">'+h52Cell(s.ticker)+'</td><td><span class="stage-badge '+stageCls(s.stage)+'">'+stageLabel(s.stage)+'</span></td><td><span class="cell-rs" style="color:'+rsColor(s.rs)+'">'+(s.rs||0)+'</span></td><td>'+antsCell(s.ticker)+'</td><td>'+wandaCell(s.ticker)+'</td><td class="cell-notes" title="'+(noteText||'')+'">'+(noteText||'—')+'</td><td><div class="row-actions"><button class="row-btn" onclick="openEdit('+s.id+')">✎ Edit</button><button class="row-btn row-btn-del" title="Remove from '+sec.title+'" onclick="delStk('+s.id+',\''+sec.id+'\')">✕</button></div></td></tr>';});html+='</tbody></table></div>';}html+='</div>';});el.innerHTML=html;updateTickerScroll();}
 
 window.quickAdd=async function(secId){var ticker=(document.getElementById('qa-tk-'+secId)||{}).value;if(!ticker||!ticker.trim()){showToast('Enter a ticker','err');return;}ticker=ticker.trim().toUpperCase();var existing=findStockByTicker(ticker);if(existing){var secT=sectionById(secId).title;if(existing.lists.indexOf(secId)>=0){showToast(ticker+' is already in '+secT,'err');return;}existing.lists.push(secId);syncListField(existing);renderWatchlist();var inp0=document.getElementById('qa-tk-'+secId);if(inp0)inp0.value='';try{await saveToBin();showToast(ticker+' added to '+secT+' (shared record)','success');}catch(e){showToast('⚠ Saved LOCAL only — cloud sync FAILED ('+(e.message||'check quota/key')+')','err');}return;}var stock={id:Date.now(),ticker:ticker,company:'',sector:'',list:secId,lists:[secId],stage:(document.getElementById('qa-st-'+secId)||{}).value||'Stage 2',rs:parseInt((document.getElementById('qa-rs-'+secId)||{}).value)||0,ema:'yes',a50:'yes',alertA:0,alertB:0,notes:'',wf:(document.getElementById('qa-wf-'+secId)||{}).value||'',rsh:'no',addedDate:new Date().toISOString().split('T')[0]};try{var r=await fetch(NEXUS_API+'/api/prices/search?q='+encodeURIComponent(ticker));var d=await r.json();if(d&&d.name&&!isBadEquityResolution(d.name)){stock.company=d.name;if(d.sector)stock.sector=d.sector;}else if(d&&d.name){stock.company='⚠ unresolved ('+ticker+')';}}catch(e){}stocks.unshift(stock);renderWatchlist();var inp=document.getElementById('qa-tk-'+secId);if(inp)inp.value='';var rsInp=document.getElementById('qa-rs-'+secId);if(rsInp)rsInp.value='';antsForTicker(ticker).then(function(){if(curPage==='watchlist')renderWatchlist();});fetchAllWanda();try{await saveToBin();showToast(ticker+' added','success');}catch(e){showToast('⚠ Saved LOCAL only — cloud sync FAILED ('+(e.message||'check quota/key')+')','err');}};
 
