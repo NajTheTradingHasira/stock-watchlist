@@ -419,6 +419,9 @@ async function fetchAllANTS(opts){
     console.log('[APEX] ANTS refreshed: '+ok+' ok, '+fail+' failed of '+toFetch.length+(srvCached?' ('+srvCached+' cached server-side)':'')+(fail?' · failed tickers retry in '+(ANTS_FAIL_TTL_MS/60000)+' min':''));
   }finally{antsBatchRunning=false;}
 }
+
+// Cell renderer. Score badge + ant icon when strict flag fires.
+// Hover tooltip exposes all 5 components — power-user can inspect drivers.
 function antsCell(ticker){
   var a=antsCache[ticker];
   if(!a)return'<span class="cell-ants-pending" title="Loading from nexus-backend…">…</span>';
