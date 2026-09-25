@@ -351,6 +351,10 @@ window.updatePolygon=function(){
 var antsCache={};   // ticker -> {ts, flag, score, components, sufficient, stale}
 var antsInflight={};// ticker -> Promise (dedupes concurrent fetches)
 var ANTS_TTL_MS=6*60*60*1000; // 6h client-side cache; backend has its own
+var ANTS_FAIL_TTL_MS=2*60*1000; // failed/stale results retry after 2 min (was 6h)
+var ANTS_CHUNK=8,ANTS_TIMEOUT_MS=30000,antsBatchRunning=false;
+function antsFresh(c,now){return !!c&&(now-c.ts)<(c.stale?ANTS_FAIL_TTL_MS:ANTS_TTL_MS);}
+function antsFail(ts){return{ts:ts,flag:false,score:null,components:null,sufficient:false,stale:true};}
 
 // ANTS compute lives in nexus-backend (/api/ants/batch). The browser never
 // sees the Polygon key — backend holds it as a Railway env var.
@@ -359,7 +363,7 @@ var ANTS_TTL_MS=6*60*60*1000; // 6h client-side cache; backend has its own
 async function antsForTicker(ticker,force){
   var now=Date.now();
   var cached=antsCache[ticker];
-  if(!force&&cached&&(now-cached.ts)<ANTS_TTL_MS)return cached;
+  if(!force&&antsFresh(cached,now))return cached;
   if(antsInflight[ticker])return antsInflight[ticker];
   antsInflight[ticker]=(async function(){
     try{
@@ -388,37 +392,33 @@ window.toggleAntsSort=function(){antsSortMode=(antsSortMode==='off')?'desc':'off
 // server fans out to Polygon, computes, and caches for 6h.
 async function fetchAllANTS(opts){
   opts=opts||{};
+  if(antsBatchRunning){console.log('[APEX] ANTS refresh already running');return;}
   var tickers=[...new Set(stocks.map(function(s){return s.ticker;}))];
   if(!tickers.length)return;
   var now=Date.now();
-  var toFetch=opts.force?tickers:tickers.filter(function(t){var c=antsCache[t];return!c||(now-c.ts)>=ANTS_TTL_MS;});
+  var toFetch=opts.force?tickers:tickers.filter(function(t){return!antsFresh(antsCache[t],now);});
   if(!toFetch.length){if(curPage==='watchlist')renderWatchlist();return;}
+  antsBatchRunning=true;var ok=0,fail=0,srvCached=0;
   try{
-    var url=NEXUS_API+'/api/ants/batch?symbols='+encodeURIComponent(toFetch.join(','))+(opts.force?'&force=true':'');
-    var r=await fetch(url,{cache:'no-store'});
-    if(!r.ok){
-      console.warn('[APEX] ANTS endpoint returned '+r.status);
-      toFetch.forEach(function(t){antsCache[t]={ts:now,flag:false,score:null,components:null,sufficient:false,stale:true};});
+    // Small chunks: one slow/uncached batch no longer blanks the whole column.
+    for(let i=0;i<toFetch.length;i+=ANTS_CHUNK){
+      const chunk=toFetch.slice(i,i+ANTS_CHUNK),ts=Date.now(),ctl=new AbortController();
+      const timer=setTimeout(function(){ctl.abort();},ANTS_TIMEOUT_MS);
+      try{
+        var url=NEXUS_API+'/api/ants/batch?symbols='+encodeURIComponent(chunk.join(','))+(opts.force?'&force=true':'');
+        var r=await fetch(url,{cache:'no-store',signal:ctl.signal});
+        if(!r.ok)throw new Error('HTTP '+r.status);
+        var data=await r.json();var results=data.ants||{};srvCached+=data.cached||0;
+        chunk.forEach(function(t){var v=results[t];if(!v){antsCache[t]=antsFail(ts);fail++;return;}antsCache[t]={ts:ts,flag:!!v.flag,score:v.score,components:v.components,sufficient:!!v.sufficient,stale:!!v.stale};if(v.stale)fail++;else ok++;});
+      }catch(e){
+        console.warn('[APEX] ANTS chunk '+(i/ANTS_CHUNK+1)+' failed ('+chunk.join(',')+'): '+(e.name==='AbortError'?'timeout after '+ANTS_TIMEOUT_MS/1000+'s':e.message));
+        chunk.forEach(function(t){antsCache[t]=antsFail(ts);});fail+=chunk.length;
+      }finally{clearTimeout(timer);}
       if(curPage==='watchlist')renderWatchlist();
-      return;
     }
-    var data=await r.json();
-    var results=data.ants||{};
-    Object.keys(results).forEach(function(t){
-      var v=results[t]||{};
-      antsCache[t]={ts:now,flag:!!v.flag,score:v.score,components:v.components,sufficient:!!v.sufficient,stale:!!v.stale};
-    });
-    var hitRate=data.cached?' ('+data.cached+' cached server-side)':'';
-    console.log('[APEX] ANTS refreshed for '+toFetch.length+' tickers'+hitRate);
-  }catch(e){
-    console.warn('[APEX] ANTS batch fetch failed:',e.message);
-    toFetch.forEach(function(t){antsCache[t]={ts:now,flag:false,score:null,components:null,sufficient:false,stale:true};});
-  }
-  if(curPage==='watchlist')renderWatchlist();
+    console.log('[APEX] ANTS refreshed: '+ok+' ok, '+fail+' failed of '+toFetch.length+(srvCached?' ('+srvCached+' cached server-side)':'')+(fail?' · failed tickers retry in '+(ANTS_FAIL_TTL_MS/60000)+' min':''));
+  }finally{antsBatchRunning=false;}
 }
-
-// Cell renderer. Score badge + ant icon when strict flag fires.
-// Hover tooltip exposes all 5 components — power-user can inspect drivers.
 function antsCell(ticker){
   var a=antsCache[ticker];
   if(!a)return'<span class="cell-ants-pending" title="Loading from nexus-backend…">…</span>';
